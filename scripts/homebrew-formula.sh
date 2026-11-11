@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:-$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)}"
 tag="v$version"
-repo="Raxvis/son-of-w"
+repo="son-of-w/son"
 sums="$(gh release download "$tag" --repo "$repo" --pattern SHA256SUMS --output -)" ||
   { echo "error: no published release $tag with SHA256SUMS" >&2; exit 1; }
 sum() {

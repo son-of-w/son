@@ -71,8 +71,8 @@ fn dir_name(path: &Path) -> Option<String> {
     Some(path.file_name()?.to_str()?.to_string())
 }
 
-/// `https://github.com/Raxvis/son-of-w.git` and
-/// `git@github.com:Raxvis/son-of-w.git` both give `son-of-w`.
+/// `https://github.com/son-of-w/son.git` and
+/// `git@github.com:son-of-w/son.git` both give `son`.
 fn repo_name(url: &str) -> Option<String> {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
@@ -87,16 +87,16 @@ mod tests {
     #[test]
     fn repo_name_from_remote_urls() {
         assert_eq!(
-            repo_name("https://github.com/Raxvis/son-of-w.git").as_deref(),
-            Some("son-of-w")
+            repo_name("https://github.com/son-of-w/son.git").as_deref(),
+            Some("son")
         );
         assert_eq!(
-            repo_name("https://github.com/Raxvis/son-of-w").as_deref(),
-            Some("son-of-w")
+            repo_name("https://github.com/son-of-w/son").as_deref(),
+            Some("son")
         );
         assert_eq!(
-            repo_name("git@github.com:Raxvis/son-of-w.git").as_deref(),
-            Some("son-of-w")
+            repo_name("git@github.com:son-of-w/son.git").as_deref(),
+            Some("son")
         );
         assert_eq!(
             repo_name("ssh://git@host/team/infra/").as_deref(),

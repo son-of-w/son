@@ -16,7 +16,7 @@ One module per service. Remote state in S3 with a DynamoDB lock.
 
 ## Install
 
-`son` runs on macOS, Linux and Windows. Download the archive for your system from the [releases page](https://github.com/Raxvis/son-of-w/releases), unpack it, and put `son` on your `PATH`.
+`son` runs on macOS, Linux and Windows. Download the archive for your system from the [releases page](https://github.com/son-of-w/son/releases), unpack it, and put `son` on your `PATH`.
 
 | System | Archive |
 | --- | --- |
@@ -51,7 +51,7 @@ make install PREFIX=/usr/local
 Without a clone:
 
 ```bash
-cargo install --git https://github.com/Raxvis/son-of-w
+cargo install --git https://github.com/son-of-w/son
 ```
 
 Then run:
