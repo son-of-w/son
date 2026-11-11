@@ -1,6 +1,5 @@
 - P1 #2 [Add provenance and explicit verification metadata](todos/2.md)
 - P1 #7 [Preserve change history and support undo](todos/7.md)
-- P1 #10 [State that recalled content is reference material, not executable instructions](todos/10.md)
 - P2 #3 [Add a memory review and freshness workflow](todos/3.md)
 - P2 #4 [Add duplicate checks and explicit memory merging](todos/4.md)
 - P2 #5 [Support stable scopes outside repositories](todos/5.md)
