@@ -381,3 +381,90 @@ fn recall_adds_the_rest_of_the_project_around_a_hit() {
     assert!(also.contains(&"Pin provider versions in every module"));
     assert!(also.contains(&"Move terraform state bucket to the shared account"));
 }
+
+impl Corpus {
+    fn recall(&self, terms: &str, limit: usize) -> search::Recall {
+        search::recall(
+            &self.conn,
+            &self.an,
+            terms,
+            &Options {
+                kind: None,
+                only_project: None,
+                current_project: None,
+                limit,
+                hops: 0,
+            },
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn the_start_of_a_word_finds_the_word() {
+    let corpus = Corpus::new("prefix");
+    assert_eq!(corpus.top("terra"), "Terraform AWS module layout");
+    assert_eq!(corpus.top("kubern"), "Kubernetes deployment manifests");
+    assert_eq!(corpus.top("migr"), "Database migrations");
+    // Two letters are too few to count as the start of a word.
+    assert!(corpus.search("te", None, None).is_empty());
+}
+
+#[test]
+fn a_mistyped_word_finds_the_word() {
+    let corpus = Corpus::new("fuzzy");
+    assert_eq!(corpus.top("terrafrom"), "Terraform AWS module layout"); // letters swapped
+    assert_eq!(corpus.top("teraform"), "Terraform AWS module layout"); // letter missing
+    assert_eq!(corpus.top("kubernettes"), "Kubernetes deployment manifests"); // letter added
+    assert_eq!(corpus.top("postgras ledger"), "Use Postgres for the ledger"); // wrong letter
+                                                                              // Too far from any stored word.
+    assert!(corpus.search("xyzzyplugh", None, None).is_empty());
+}
+
+#[test]
+fn loose_matches_are_marked_and_come_after_exact_ones() {
+    let corpus = Corpus::new("loose-order");
+    corpus.add("web", "pattern", "Terraformation of the garden", "", &[]);
+    let result = corpus.recall("terra", 50);
+    assert!(
+        result.hits.iter().all(|hit| hit.close),
+        "nothing holds the word 'terra' itself"
+    );
+
+    corpus.add("web", "note", "Terra firma", "", &[]);
+    let result = corpus.recall("terra", 50);
+    assert_eq!(result.hits[0].node.title, "Terra firma");
+    assert!(!result.hits[0].close);
+    assert!(result.hits[1..].iter().all(|hit| hit.close));
+    assert!(result.hits.len() > 1);
+}
+
+#[test]
+fn enough_exact_matches_means_no_loose_ones() {
+    let corpus = Corpus::new("loose-skip");
+    corpus.add("web", "note", "Loggingham village fete", "", &[]);
+    // Five nodes hold the word itself, so the limit of 3 is met exactly.
+    let few = corpus.recall("logging", 3);
+    assert!(few.hits.iter().all(|hit| !hit.close));
+    // With room to spare, the word that only starts the same way appears, last.
+    let many = corpus.recall("logging", 50);
+    let last = many.hits.last().unwrap();
+    assert_eq!(last.node.title, "Loggingham village fete");
+    assert!(last.close);
+}
+
+#[test]
+fn a_word_the_index_knows_is_not_treated_as_a_typo() {
+    let corpus = Corpus::new("known");
+    corpus.add("web", "note", "Ledgar the office cat", "", &[]);
+    let titles: Vec<String> = corpus
+        .recall("ledger", 50)
+        .hits
+        .into_iter()
+        .map(|hit| hit.node.title)
+        .collect();
+    assert!(titles.contains(&"Use Postgres for the ledger".to_string()));
+    assert!(!titles.contains(&"Ledgar the office cat".to_string()));
+    // The other way round, the unknown word does reach the known one.
+    assert_eq!(corpus.top("ledgor"), "Use Postgres for the ledger");
+}

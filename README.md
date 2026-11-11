@@ -41,6 +41,7 @@ son init
 - **Every node belongs to a project.** The project is found from a `.son-project` file in the directory or a parent, else the git remote's repo name, else the git root's directory name, else the current directory's name. `--project <name>` overrides it.
 - **Recall searches every project.** Matches from the current project come first; matches from other projects follow. This is how memory crosses sessions and projects.
 - **Search uses no model.** Text is split (including `camelCase` and `snake_case`), stop words are removed, words are stemmed, and synonyms such as `tf` → `terraform` are applied to the query. Ranking is BM25 with adjustments for title and tag matches, node type, recency and superseded decisions.
+- **Near misses still match.** When the exact words find too few nodes, recall also takes the start of a word (`terra` finds `terraform`) and typos (`terrafrom` finds `terraform`). These are marked `close match` and listed after exact matches.
 - **Links connect nodes.** `son link <from> <relation> <to>` with `relates_to`, `supersedes`, `depends_on`, `derived_from` or `belongs_to`. Recall follows links one hop (or two) from its matches. A superseded decision is kept and ranked lower.
 - **Nothing is lost by default.** `son drop` is a soft delete; `son restore` brings a node back.
 

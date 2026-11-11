@@ -90,6 +90,13 @@ Store the analyzed text in a shadow column that FTS5 indexes, keep the original 
 
 **Ranking:** BM25 from FTS5 (title weighted 10, tags 5, body 1), then adjusted in code: a boost for each query word the title or tags cover (BM25 alone lets a one-line todo beat a full pattern), a small head start for patterns and decisions, a recency boost that halves every 90 days, a boost by node type when the query includes a type word such as `decisions` or `todos`, and a penalty for superseded decisions and closed todos. Query expansion beyond synonyms is deliberately left to Claude, which is told in CLAUDE.md to search with several related terms.
 
+**Prefix and fuzzy matching:** recall runs in two passes. The first takes the query's words as given (stemmed, with synonyms). If it finds fewer nodes than the limit, a second pass also takes:
+
+* **Prefixes:** a query word of 3 or more characters matches stored words that start with it, so `terra` finds `terraform`.
+* **Typos:** a query word that the index does not hold at all is compared with every stored word. Words within 1 edit (for 4 to 7 characters) or 2 edits (for 8 or more) are searched too, nearest first, at most 3 per query word. An edit is one inserted, deleted, replaced, or swapped letter, so `terrafrom` finds `terraform`. A word the index does hold is never treated as a typo.
+
+Loose matches are marked `close match` (`"match": "close"` in JSON) and are listed after exact matches within the same project band. The stored words come from an `fts5vocab` table over the index (schema version 2).
+
 **Scope of search:** `recall` searches every project by default. Matches from the current project always come first, ranked among themselves; matches from other projects follow, labelled with their project name. If the current project has no match, the other projects' matches are still shown. `--project <name>` restricts results to one project.
 
 **Stale and superseded nodes:** never hidden, only ranked lower. A superseded decision is shown marked as superseded, with a pointer to its replacement. If the newer node is dropped or turns out to be wrong, the older one is still there to fall back on.

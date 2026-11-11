@@ -1,7 +1,13 @@
 //! Recall: analyze the query, rank with BM25, adjust for recency, type and
 //! superseded state, put the current project first, then walk the graph.
+//!
+//! Matching has two passes. The first takes the query's words as given
+//! (stemmed, with synonyms). If that finds fewer nodes than asked for, the
+//! second also takes words that start with a query word (`terra` finds
+//! `terraform`) and stored words a typo away (`terrafrom` finds `terraform`).
+//! Loose matches are marked and listed after exact ones.
 
-use crate::analyze::Analyzer;
+use crate::analyze::{edit_distance, Analyzer, Query};
 use crate::store::{self, Node, COLS, NCOLS};
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection};
@@ -25,6 +31,10 @@ const TITLE_COVERAGE_BOOST: f64 = 1.0;
 const TAG_COVERAGE_BOOST: f64 = 0.5;
 const SUPERSEDED_PENALTY: f64 = 0.4;
 const CLOSED_TODO_PENALTY: f64 = 0.5;
+/// A query word this long or longer also matches words that start with it.
+const MIN_PREFIX_CHARS: usize = 3;
+/// How many near-miss words to try for one mistyped query word.
+const MAX_FUZZY_TERMS: usize = 3;
 const MAX_NEIGHBORS: usize = 20;
 const MAX_ALSO: usize = 8;
 
@@ -45,6 +55,9 @@ pub struct Hit {
     pub score: f64,
     /// True when the node is in the current project.
     pub current: bool,
+    /// True when the node matched only loosely: by the start of a word, or
+    /// by a word a typo away from the query. False for an exact match.
+    pub close: bool,
     /// Short id of the node that supersedes this one.
     pub superseded_by: Option<String>,
 }
@@ -64,12 +77,109 @@ pub struct Recall {
     pub also: Vec<Node>,
 }
 
+/// One word of the query as the search sees it: the terms that stand for
+/// it, and for a loose search a prefix as well.
+struct Matcher {
+    terms: Vec<String>,
+    prefix: Option<String>,
+}
+
+impl Matcher {
+    fn matches(&self, token: &str) -> bool {
+        self.terms.iter().any(|term| term == token)
+            || self.prefix.as_deref().is_some_and(|p| token.starts_with(p))
+    }
+}
+
+/// The FTS5 MATCH expression for a set of matchers. Terms hold only letters
+/// and digits, so quoting them is always safe.
+fn match_expression(matchers: &[Matcher]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for matcher in matchers {
+        for term in &matcher.terms {
+            parts.push(format!("\"{term}\""));
+        }
+        if let Some(prefix) = &matcher.prefix {
+            parts.push(format!("\"{prefix}\"*"));
+        }
+    }
+    parts.sort();
+    parts.dedup();
+    parts.join(" OR ")
+}
+
 pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> Result<Recall> {
     let query = an.query(terms, &store::synonyms(conn)?);
-    let Some(fts) = query.fts() else {
+    if query.groups.is_empty() {
         bail!("nothing to search for in '{terms}'");
-    };
+    }
+    let limit = opts.limit.max(1);
 
+    // First the words as given (after stemming and synonyms).
+    let exact: Vec<Matcher> = query
+        .groups
+        .iter()
+        .map(|group| Matcher {
+            terms: group.terms.clone(),
+            prefix: None,
+        })
+        .collect();
+    let mut hits = ranked(conn, an, &query, &exact, opts, false)?;
+
+    // Too few? Then also take words that start with a query word, and
+    // stored words that are a typo away from one. These never come before
+    // an exact match from the same project band.
+    if hits.len() < limit {
+        let mut loose = Vec::with_capacity(query.groups.len());
+        for group in &query.groups {
+            let mut terms = group.terms.clone();
+            terms.extend(fuzzy_terms(conn, &group.stem)?);
+            let prefix =
+                (group.stem.chars().count() >= MIN_PREFIX_CHARS).then(|| group.stem.clone());
+            loose.push(Matcher { terms, prefix });
+        }
+        if match_expression(&loose) != match_expression(&exact) {
+            let found: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
+            hits.extend(
+                ranked(conn, an, &query, &loose, opts, true)?
+                    .into_iter()
+                    .filter(|hit| !found.contains(&hit.node.id)),
+            );
+        }
+    }
+
+    hits.sort_by(|a, b| {
+        b.current
+            .cmp(&a.current)
+            .then(a.close.cmp(&b.close))
+            .then(b.score.total_cmp(&a.score))
+            .then_with(|| b.node.id.cmp(&a.node.id))
+    });
+    hits.truncate(limit);
+
+    let mut seen: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
+    let neighbors = expand(conn, &hits, opts.hops, &mut seen)?;
+    let also = if opts.hops > 0 {
+        also_in_projects(conn, &hits, &seen)?
+    } else {
+        Vec::new()
+    };
+    Ok(Recall {
+        hits,
+        neighbors,
+        also,
+    })
+}
+
+/// Run one search and score its rows. Not yet sorted or cut to the limit.
+fn ranked(
+    conn: &Connection,
+    an: &Analyzer,
+    query: &Query,
+    matchers: &[Matcher],
+    opts: &Options,
+    close: bool,
+) -> Result<Vec<Hit>> {
     let sql = format!(
         "SELECT {COLS}, bm25(nodes_fts, {WEIGHTS}), \
                 julianday('now') - julianday(n.updated_at), \
@@ -87,7 +197,12 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
     let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<(Node, f64, Option<f64>, bool)> = stmt
         .query_map(
-            params![fts, opts.kind, opts.only_project, candidates],
+            params![
+                match_expression(matchers),
+                opts.kind,
+                opts.only_project,
+                candidates
+            ],
             |r| {
                 Ok((
                     store::node_from_row(r)?,
@@ -106,8 +221,8 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
         let age = age_days.unwrap_or(0.0).max(0.0);
         score *= 1.0 + RECENCY_BOOST * 0.5f64.powf(age / RECENCY_HALF_LIFE_DAYS);
         score *= 1.0
-            + TITLE_COVERAGE_BOOST * coverage(&query.groups, &an.tokens(&node.title))
-            + TAG_COVERAGE_BOOST * coverage(&query.groups, &an.tokens(&node.tags.join(" ")));
+            + TITLE_COVERAGE_BOOST * coverage(matchers, &an.tokens(&node.title))
+            + TAG_COVERAGE_BOOST * coverage(matchers, &an.tokens(&node.tags.join(" ")));
         score *= match node.kind.as_str() {
             "pattern" => PATTERN_PRIOR,
             "decision" => DECISION_PRIOR,
@@ -134,41 +249,54 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
             node,
             score,
             current,
+            close,
             superseded_by,
         });
     }
-    hits.sort_by(|a, b| {
-        b.current
-            .cmp(&a.current)
-            .then(b.score.total_cmp(&a.score))
-            .then_with(|| b.node.id.cmp(&a.node.id))
-    });
-    hits.truncate(opts.limit.max(1));
+    Ok(hits)
+}
 
-    let mut seen: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
-    let neighbors = expand(conn, &hits, opts.hops, &mut seen)?;
-    let also = if opts.hops > 0 {
-        also_in_projects(conn, &hits, &seen)?
-    } else {
-        Vec::new()
+/// Stored words that are a typo away from `stem`. Only for a word the index
+/// does not hold at all: a word that is there is taken to be meant.
+fn fuzzy_terms(conn: &Connection, stem: &str) -> Result<Vec<String>> {
+    let max = match stem.chars().count() {
+        0..=3 => return Ok(Vec::new()),
+        4..=7 => 1,
+        _ => 2,
     };
-    Ok(Recall {
-        hits,
-        neighbors,
-        also,
-    })
+    let known: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM nodes_vocab WHERE term = ?1)",
+        [stem],
+        |r| r.get(0),
+    )?;
+    if known {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare("SELECT term, doc FROM nodes_vocab")?;
+    let mut near: Vec<(usize, i64, String)> = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let term: String = row.get(0)?;
+        if let Some(distance) = edit_distance(stem, &term, max) {
+            near.push((distance, row.get(1)?, term));
+        }
+    }
+    // Nearest first; among equals, the word more nodes use.
+    near.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    near.truncate(MAX_FUZZY_TERMS);
+    Ok(near.into_iter().map(|(_, _, term)| term).collect())
 }
 
 /// The share of the query's words that appear in `tokens`, from 0 to 1.
-fn coverage(groups: &[Vec<String>], tokens: &[String]) -> f64 {
-    if groups.is_empty() {
+fn coverage(matchers: &[Matcher], tokens: &[String]) -> f64 {
+    if matchers.is_empty() {
         return 0.0;
     }
-    let covered = groups
+    let covered = matchers
         .iter()
-        .filter(|group| group.iter().any(|term| tokens.contains(term)))
+        .filter(|matcher| tokens.iter().any(|token| matcher.matches(token)))
         .count();
-    covered as f64 / groups.len() as f64
+    covered as f64 / matchers.len() as f64
 }
 
 /// Walk edges outward from the hits, one hop at a time.

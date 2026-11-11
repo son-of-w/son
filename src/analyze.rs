@@ -50,11 +50,18 @@ impl Default for Analyzer {
 pub struct Query {
     /// Every stemmed term, without repeats.
     pub terms: Vec<String>,
-    /// The same terms, grouped by the query word they came from: the word
-    /// itself plus its synonyms. Used to count how many of the query's words
-    /// a node covers.
-    pub groups: Vec<Vec<String>>,
+    /// The same terms, grouped by the query word they came from.
+    pub groups: Vec<Group>,
     pub type_hint: Option<&'static str>,
+}
+
+/// One word of the query: its own stem, and every term that stands for it
+/// (the stem plus its synonyms). Used to count how many of the query's words
+/// a node covers, and as the starting point for prefix and fuzzy matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    pub stem: String,
+    pub terms: Vec<String>,
 }
 
 impl Query {
@@ -138,9 +145,10 @@ impl Analyzer {
             words = all_words.iter().collect();
         }
 
-        let mut groups: Vec<Vec<String>> = Vec::new();
+        let mut groups: Vec<Group> = Vec::new();
         for word in words {
-            let mut group = vec![self.stem(word)];
+            let stem = self.stem(word);
+            let mut group = vec![stem.clone()];
             let canonical = synonyms.get(word).unwrap_or(word);
             group.extend(self.tokens(canonical));
             for (term, target) in synonyms {
@@ -151,12 +159,12 @@ impl Analyzer {
             group.retain(|token| !token.is_empty());
             group.sort();
             group.dedup();
-            if !group.is_empty() && !groups.contains(&group) {
-                groups.push(group);
+            if !group.is_empty() && !groups.iter().any(|g| g.terms == group) {
+                groups.push(Group { stem, terms: group });
             }
         }
         let mut terms: Vec<String> = Vec::new();
-        for token in groups.iter().flatten() {
+        for token in groups.iter().flat_map(|g| &g.terms) {
             if !terms.contains(token) {
                 terms.push(token.clone());
             }
@@ -167,6 +175,43 @@ impl Analyzer {
             type_hint,
         }
     }
+}
+
+/// How many single-character edits turn `a` into `b`: an insert, a delete,
+/// a replacement, or a swap of two neighbours (so `terrafrom` is 1 away from
+/// `terraform`). Returns `None` as soon as the answer must be above `max`.
+pub fn edit_distance(a: &str, b: &str, max: usize) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > max {
+        return None;
+    }
+    // Three rows of the usual table: two back, one back, and the current.
+    let mut before: Vec<usize> = vec![0; b.len() + 1];
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current: Vec<usize> = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        current[0] = i;
+        let mut row_best = current[0];
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (previous[j] + 1)
+                .min(current[j - 1] + 1)
+                .min(previous[j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(before[j - 2] + 1);
+            }
+            current[j] = best;
+            row_best = row_best.min(best);
+        }
+        if row_best > max {
+            return None;
+        }
+        std::mem::swap(&mut before, &mut previous);
+        std::mem::swap(&mut previous, &mut current);
+    }
+    let distance = previous[b.len()];
+    (distance <= max).then_some(distance)
 }
 
 /// `awsProvider` -> `aws`, `Provider`; `HTTPServer` -> `HTTP`, `Server`.
@@ -252,6 +297,19 @@ mod tests {
         let from_canonical = an.query("kubernetes", &synonyms()).terms;
         assert!(from_canonical.contains(&"k8s".to_string()));
         assert!(from_canonical.contains(&"kube".to_string()));
+    }
+
+    #[test]
+    fn edit_distance_counts_typos() {
+        assert_eq!(edit_distance("terraform", "terraform", 2), Some(0));
+        assert_eq!(edit_distance("terrafrom", "terraform", 2), Some(1)); // swap
+        assert_eq!(edit_distance("teraform", "terraform", 2), Some(1)); // missing letter
+        assert_eq!(edit_distance("terraformm", "terraform", 2), Some(1)); // extra letter
+        assert_eq!(edit_distance("tarraform", "terraform", 2), Some(1)); // wrong letter
+        assert_eq!(edit_distance("tarrafrom", "terraform", 2), Some(2));
+        assert_eq!(edit_distance("postgres", "terraform", 2), None);
+        assert_eq!(edit_distance("ab", "abcde", 2), None);
+        assert_eq!(edit_distance("", "ab", 2), Some(2));
     }
 
     #[test]

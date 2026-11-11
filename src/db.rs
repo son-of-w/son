@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// are not used yet; they exist so the version 2 central store needs no
@@ -76,6 +76,13 @@ INSERT INTO synonyms (term, canonical) VALUES
     ('infra', 'infrastructure');
 ";
 
+/// Version 2 adds a view of the search index's vocabulary: every indexed
+/// term and how many nodes hold it. Fuzzy matching reads it to find the
+/// stored words nearest to a mistyped one. It holds no data of its own.
+const SCHEMA_V2: &str = "
+CREATE VIRTUAL TABLE nodes_vocab USING fts5vocab('nodes_fts', 'row');
+";
+
 /// `SON_DB` if set, else `~/.son-of-w/son.db`.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
@@ -119,10 +126,14 @@ fn migrate(conn: &Connection) -> Result<()> {
     // created the schema while this one waited.
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = (|| -> Result<()> {
-        if user_version(conn)? < 1 {
+        let version = user_version(conn)?;
+        if version < 1 {
             conn.execute_batch(SCHEMA_V1)?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if version < 2 {
+            conn.execute_batch(SCHEMA_V2)?;
+        }
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     })();
     match result {
@@ -134,5 +145,59 @@ fn migrate(conn: &Connection) -> Result<()> {
             let _ = conn.execute_batch("ROLLBACK");
             Err(err)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("son-db-{name}-{}.db", std::process::id()));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        path
+    }
+
+    #[test]
+    fn a_version_1_database_is_brought_up_to_date_and_keeps_its_rows() {
+        let path = temp_db("upgrade");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute_batch(
+                "INSERT INTO nodes (id, type, title, created_at, updated_at) \
+                 VALUES ('01X', 'note', 'kept', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+                 INSERT INTO nodes_fts (node_id, title, tags, body) VALUES ('01X', 'kept', '', '');",
+            )
+            .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), SCHEMA_VERSION);
+        let title: String = conn
+            .query_row("SELECT title FROM nodes WHERE id = '01X'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "kept");
+        let terms: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM nodes_vocab WHERE term = 'kept'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(terms, 1);
+    }
+
+    #[test]
+    fn a_newer_database_is_refused() {
+        let path = temp_db("newer");
+        {
+            let conn = open(&path).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+        assert!(open(&path).is_err());
     }
 }

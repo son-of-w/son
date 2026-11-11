@@ -681,3 +681,38 @@ fn parallel_sessions_do_not_collide() {
         1
     );
 }
+
+#[test]
+fn recall_matches_prefixes_and_typos_and_says_so() {
+    let sb = Sandbox::new("loose");
+    sb.ok(
+        "alpha",
+        &[
+            "remember",
+            "pattern",
+            "Terraform AWS layout",
+            "--tag",
+            "terraform",
+        ],
+    );
+
+    let exact = sb.ok("alpha", &["recall", "terraform"]).stdout;
+    assert!(exact.contains("Terraform AWS layout") && !exact.contains("close match"));
+
+    for query in ["terra", "terrafrom", "teraform"] {
+        let out = sb.ok("alpha", &["recall", query]).stdout;
+        assert!(
+            out.contains("Terraform AWS layout"),
+            "'{query}' found nothing"
+        );
+        assert!(
+            out.contains("close match"),
+            "'{query}' was not marked as a close match"
+        );
+    }
+
+    let json = sb.ok("alpha", &["--json", "recall", "terrafrom"]).json();
+    assert_eq!(json["hits"][0]["match"], "close");
+    let json = sb.ok("alpha", &["--json", "recall", "terraform"]).json();
+    assert_eq!(json["hits"][0]["match"], "exact");
+}

@@ -137,6 +137,7 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
                 let mut value = node_json(&h.node);
                 value["score"] = json!((h.score * 1000.0).round() / 1000.0);
                 value["current_project"] = json!(h.current);
+                value["match"] = json!(if h.close { "close" } else { "exact" });
                 value["superseded_by"] = json!(h.superseded_by);
                 value
             })
@@ -176,6 +177,9 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
             facts.push(format!("tags: {}", node.tags.join(", ")));
         }
         facts.push(format!("updated {}", date(&node.updated_at)));
+        if hit.close {
+            facts.push("close match".to_string());
+        }
         println!("{}", facts.join(" · "));
         if let Some(newer) = &hit.superseded_by {
             println!("SUPERSEDED by `{newer}`; kept for reference.");
