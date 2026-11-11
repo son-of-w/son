@@ -39,6 +39,7 @@ struct App {
 fn log_name(command: &Command) -> Option<(&'static str, bool)> {
     Some(match command {
         Command::Init { .. }
+        | Command::Doctor
         | Command::List { .. }
         | Command::Log { .. }
         | Command::Stats { .. } => return None,
@@ -69,6 +70,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         },
         Command::Export { .. } => ("export", false),
         Command::Import { .. } => ("import", true),
+        Command::Backup { .. } => ("backup", false),
         Command::Context { .. } => ("context", false),
         Command::Reindex => ("reindex", true),
     })
@@ -95,6 +97,19 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", instructions::skill());
             return Ok(());
         }
+    }
+    if matches!(cli.command, Command::Doctor) {
+        // Doctor looks at the database as it is: it must not be opened in
+        // the usual way, which would create or upgrade it.
+        let report = crate::doctor::run(&db::path()?);
+        report::doctor(&report, cli.json);
+        return match report.status {
+            crate::doctor::Status::Problem => Err(coded(
+                "problems_found",
+                "son doctor found a problem; see its report",
+            )),
+            _ => Ok(()),
+        };
     }
     // A check promises to change nothing: no database is made or upgraded,
     // and nothing goes into the activity log.
@@ -354,7 +369,29 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Export {
             collection: project,
         } => app.export(project.as_deref()),
-        Command::Import { file } => app.import(&file),
+        Command::Import { file, replace } => app.import(&file, replace),
+        Command::Backup { destination } => {
+            let made = crate::backup::make(&app.conn, Path::new(&destination))?;
+            app.note(|draft| draft.detail = Some(made.path.clone()));
+            if app.json {
+                render::print_json(&serde_json::to_value(&made)?);
+            } else {
+                println!(
+                    "backup written: {} ({} bytes)\n{} nodes in {} collections, {} links, {} history entries, {} log entries, {} keys\nRestore it with `son import {}`.",
+                    made.path,
+                    made.bytes,
+                    made.counts.nodes,
+                    made.counts.collections,
+                    made.counts.links,
+                    made.counts.history,
+                    made.counts.log,
+                    made.counts.keys,
+                    made.path
+                );
+            }
+            Ok(())
+        }
+        Command::Doctor => unreachable!("doctor runs before the database is opened"),
         Command::Context {
             collection: project,
             max_chars,
@@ -1511,7 +1548,43 @@ impl App {
         Ok(())
     }
 
-    fn import(&self, file: &str) -> Result<()> {
+    fn import(&self, file: &str, replace: bool) -> Result<()> {
+        self.note(|draft| draft.detail = Some(file.to_string()));
+        if file != "-" && crate::backup::is_sqlite(Path::new(file)) {
+            let done = crate::backup::restore(&self.conn, &self.an, Path::new(file), replace)?;
+            self.note(|draft| {
+                draft.results = Some(done.counts.nodes + done.counts.collections);
+            });
+            if self.json {
+                render::print_json(&serde_json::to_value(&done)?);
+            } else {
+                println!(
+                    "restored from {}: {} nodes in {} collections, {} links, {} history entries, {} log entries, {} keys",
+                    done.from,
+                    done.counts.nodes,
+                    done.counts.collections,
+                    done.counts.links,
+                    done.counts.history,
+                    done.counts.log,
+                    done.counts.keys
+                );
+                if !done.replaced.is_empty() {
+                    println!(
+                        "replaced: {} nodes, {} history entries, {} log entries",
+                        done.replaced.nodes + done.replaced.collections,
+                        done.replaced.history,
+                        done.replaced.log
+                    );
+                }
+            }
+            return Ok(());
+        }
+        if replace {
+            return Err(coded(
+                "invalid_request",
+                "--replace is for restoring a backup made by `son backup`; a JSON export is merged, not replaced",
+            ));
+        }
         let text = if file == "-" {
             let mut text = String::new();
             std::io::stdin().read_to_string(&mut text)?;

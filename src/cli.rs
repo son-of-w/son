@@ -365,8 +365,34 @@ pub enum Command {
         #[arg(long)]
         collection: Option<String>,
     },
-    /// Load a JSON export ("-" reads stdin)
-    Import { file: String },
+    /// Load a JSON export, or restore a backup
+    ///
+    /// The file's kind is found from its content. A JSON export (from
+    /// `son export --json`; "-" reads stdin) is merged into the database.
+    /// A backup (from `son backup`) is a full restore: afterwards the
+    /// database holds exactly what the backup holds.
+    Import {
+        file: String,
+        /// For a backup: replace everything in a database that is not
+        /// empty. Without it, such a restore is refused
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Write a full copy of the database to a file
+    ///
+    /// The copy is one SQLite file with everything: nodes, links, history,
+    /// the activity log and keys. It is safe to make while other sessions
+    /// write. Restore it with `son import <file>`.
+    Backup {
+        /// The file to write (it must not exist), or a folder to put a
+        /// file named after the time in
+        destination: String,
+    },
+    /// Check the database and the agent setup, and say how to fix faults
+    ///
+    /// Doctor only looks. It changes nothing, and does not upgrade the
+    /// database.
+    Doctor,
     /// Print what is stored for a collection, for the start of a session
     Context {
         /// Collection to show (default: the current collection)

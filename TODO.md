@@ -1,4 +1,3 @@
-- P2 #9 [Add consistent local backups and diagnostics](todos/9.md)
 - P2 #11 [Evaluate the memory loop across agents and task types](todos/11.md)
 - P2 #13 [Version 2: optional central store and sync](todos/13.md)
   - P2 #13.1 [Configure named central-store remotes](todos/13.1.md)

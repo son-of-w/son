@@ -288,6 +288,27 @@ fn entry_notes(entry: &Entry) -> String {
     notes
 }
 
+/// `son doctor`: one line for each check, and what to run for each fault.
+pub fn doctor(report: &crate::doctor::Report, json: bool) {
+    if json {
+        print_json(&serde_json::to_value(report).expect("a report always serializes"));
+        return;
+    }
+    println!("# son doctor: {}", report.status.as_str());
+    for check in &report.checks {
+        println!(
+            "- [{}] {}: {}",
+            check.status.as_str(),
+            check.name,
+            check.detail
+        );
+        if let Some(fix) = &check.fix {
+            println!("  fix: {fix}");
+        }
+    }
+    println!("\nDoctor changed nothing.");
+}
+
 /// `son review`: the nodes that need attention, each with its reasons.
 pub fn review(page: &Page<crate::review::Item>, scope: &str, command: &str, json: bool) {
     if json {

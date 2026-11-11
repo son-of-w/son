@@ -2612,6 +2612,438 @@ fn a_stale_mark_does_not_change_the_ranking() {
 }
 
 #[test]
+fn a_backup_made_during_writes_restores_whole() {
+    let sb = Sandbox::new("backup");
+    let first = sb
+        .ok(
+            "alpha",
+            &["remember", "fact", "Before the backup", "--key", "k-1"],
+        )
+        .id();
+    sb.ok("alpha", &["edit", &first, "--body", "Edited once."]);
+    let other = sb.ok("alpha", &["remember", "note", "Linked note"]).id();
+    sb.ok("alpha", &["link", &other, "relates_to", &first]);
+
+    // Writers run while the backup is made.
+    let writers: Vec<_> = (0..12)
+        .map(|i| {
+            sb.command(
+                "alpha",
+                &[
+                    "remember",
+                    "note",
+                    &format!("Written during the backup {i}"),
+                ],
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+        })
+        .collect();
+    let file = sb.root.join("full.db");
+    let made = sb
+        .ok("alpha", &["--json", "backup", file.to_str().unwrap()])
+        .json();
+    for writer in writers {
+        let output = writer.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(made["path"], file.to_str().unwrap());
+    assert!(made["bytes"].as_u64().unwrap() > 0);
+
+    // The file is one consistent moment: every node in it has its history,
+    // however many of the writers it caught.
+    let copy = rusqlite::Connection::open(&file).unwrap();
+    let ok: String = copy
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ok, "ok");
+    let (nodes, with_history, indexed): (i64, i64, i64) = copy
+        .query_row(
+            "SELECT (SELECT count(*) FROM nodes), \
+                    (SELECT count(DISTINCT node_id) FROM revisions), \
+                    (SELECT count(*) FROM nodes_fts)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(nodes, with_history);
+    assert_eq!(nodes, indexed);
+    assert_eq!(
+        made["nodes"].as_i64().unwrap() + made["collections"].as_i64().unwrap(),
+        nodes
+    );
+    assert!((2..=14).contains(&made["nodes"].as_i64().unwrap()));
+    drop(copy);
+
+    // An existing file is never overwritten; a folder gets a new file.
+    let bytes = std::fs::read(&file).unwrap();
+    let again = sb.son("alpha", &["backup", file.to_str().unwrap()]);
+    assert!(
+        !again.ok && again.stderr.contains("already exists"),
+        "{}",
+        again.stderr
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    let folder = sb.root.join("backups");
+    std::fs::create_dir_all(&folder).unwrap();
+    let out = sb.ok("alpha", &["backup", folder.to_str().unwrap()]).stdout;
+    assert!(
+        out.contains("backup written:") && out.contains("son-backup-"),
+        "{out}"
+    );
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+    assert!(!sb.son("alpha", &["backup", "/no/such/folder/x.db"]).ok);
+    // No other command makes a backup.
+    sb.ok("alpha", &["remember", "note", "After"]);
+    sb.ok("alpha", &["drop", &other]);
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+
+    // Restore into a place with no database: history, log and keys are there.
+    let fresh = Sandbox::new("backup-fresh");
+    let out = fresh
+        .ok("alpha", &["import", file.to_str().unwrap()])
+        .stdout;
+    assert!(out.starts_with("restored from"), "{out}");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        bytes,
+        "the backup file was changed"
+    );
+    let history = fresh.ok("alpha", &["--json", "history", &first]).json();
+    assert_eq!(history["total"], 3);
+    assert_eq!(history["items"][1]["before"]["body"], "");
+    assert!(fresh
+        .ok("alpha", &["log"])
+        .stdout
+        .contains("Before the backup"));
+    assert!(fresh
+        .ok("alpha", &["recall", "edited"])
+        .stdout
+        .contains("Before the backup"));
+    assert!(fresh
+        .ok("alpha", &["show", &other])
+        .stdout
+        .contains("relates_to"));
+    let replay = fresh
+        .ok(
+            "alpha",
+            &["remember", "fact", "Before the backup", "--key", "k-1"],
+        )
+        .stdout;
+    assert!(replay.contains("already saved with this key"), "{replay}");
+    // History goes on from where the backup left it, and undo works.
+    let edit_op = history["items"][1]["op"].to_string();
+    fresh.ok("alpha", &["undo", &first, "--op", &edit_op]);
+    assert_eq!(
+        fresh.ok("alpha", &["--json", "show", &first]).json()["body"],
+        ""
+    );
+    let newest = newest_op(&fresh, &first);
+    assert!(newest > history["items"][0]["op"].as_i64().unwrap());
+}
+
+#[test]
+fn restoring_a_backup_replaces_only_when_told_to() {
+    let source = Sandbox::new("restore-source");
+    let kept = source
+        .ok("alpha", &["remember", "decision", "From the backup"])
+        .id();
+    let file = source.root.join("snap.db");
+    source.ok("alpha", &["backup", file.to_str().unwrap()]);
+    let file = file.to_str().unwrap();
+
+    let sb = Sandbox::new("restore");
+    // An empty database (made, but never used) takes a restore as it is.
+    sb.ok("alpha", &["init", "--db-only"]);
+    sb.ok("alpha", &["import", file]);
+    assert!(sb
+        .ok("alpha", &["show", &kept])
+        .stdout
+        .contains("From the backup"));
+
+    // A database that holds anything refuses, and stays as it was.
+    let mine = sb.ok("alpha", &["remember", "note", "Only here"]).id();
+    let before = sb.ok("alpha", &["--json", "export"]).json()["nodes"].clone();
+    let refused = sb.son("alpha", &["import", file]);
+    assert!(
+        !refused.ok && refused.stderr.contains("is not empty"),
+        "{}",
+        refused.stderr
+    );
+    assert!(refused.stderr.contains("--replace") && refused.stderr.contains("Nothing was changed"));
+    let (_, error) = json_error(&sb, "alpha", &["import", file]);
+    assert_eq!(error["code"], "not_empty");
+    assert_eq!(
+        sb.ok("alpha", &["--json", "export"]).json()["nodes"],
+        before
+    );
+    // Even with no live node left, history and the log count as content.
+    let quiet = Sandbox::new("restore-log-only");
+    quiet.ok("alpha", &["collections"]);
+    assert!(!quiet.son("alpha", &["import", file]).ok);
+
+    // Files that are not a good son backup change nothing either.
+    let bad = sb.root.join("bad.db");
+    let mut garbage = b"SQLite format 3\0".to_vec();
+    garbage.extend(std::iter::repeat_n(7u8, 5000));
+    std::fs::write(&bad, &garbage).unwrap();
+    let foreign = sb.root.join("foreign.db");
+    rusqlite::Connection::open(&foreign)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);")
+        .unwrap();
+    let future = sb.root.join("future.db");
+    std::fs::copy(file, &future).unwrap();
+    rusqlite::Connection::open(&future)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 999")
+        .unwrap();
+    let damaged = sb.root.join("damaged.db");
+    let mut bytes = std::fs::read(file).unwrap();
+    let middle = bytes.len() / 2;
+    for byte in &mut bytes[middle..middle + 3000] {
+        *byte = 0xAB;
+    }
+    std::fs::write(&damaged, &bytes).unwrap();
+    for path in [&bad, &foreign, &future, &damaged] {
+        let (_, error) = json_error(
+            &sb,
+            "alpha",
+            &["import", path.to_str().unwrap(), "--replace"],
+        );
+        assert_eq!(error["code"], "import_failed", "{path:?}: {error}");
+        assert_eq!(
+            sb.ok("alpha", &["--json", "export"]).json()["nodes"],
+            before,
+            "{path:?}"
+        );
+    }
+    // --replace is not for JSON, and JSON import still merges.
+    let json_file = sb.root.join("dump.json");
+    std::fs::write(&json_file, source.ok("alpha", &["export", "--json"]).stdout).unwrap();
+    assert!(
+        !sb.son(
+            "alpha",
+            &["import", json_file.to_str().unwrap(), "--replace"]
+        )
+        .ok
+    );
+    sb.ok("alpha", &["import", json_file.to_str().unwrap()]);
+    assert!(sb
+        .ok("alpha", &["show", &mine])
+        .stdout
+        .contains("Only here"));
+
+    // With --replace the database holds what the backup holds, and no more.
+    let out = sb.ok("alpha", &["import", file, "--replace"]).stdout;
+    assert!(
+        out.contains("restored from") && out.contains("replaced:"),
+        "{out}"
+    );
+    assert!(!sb.son("alpha", &["show", &mine]).ok);
+    assert!(sb
+        .ok("alpha", &["recall", "only", "here"])
+        .stdout
+        .contains("No matches"));
+    assert!(sb
+        .ok("alpha", &["show", &kept])
+        .stdout
+        .contains("From the backup"));
+    assert_eq!(sb.ok("alpha", &["--json", "list"]).json()["total"], 1);
+    // The log is the backup's log, plus this restore.
+    let log = sb.ok("alpha", &["--json", "log"]).json();
+    let commands: Vec<&str> = log["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["command"].as_str().unwrap())
+        .collect();
+    assert!(
+        commands.contains(&"import") && commands.contains(&"remember"),
+        "{commands:?}"
+    );
+    assert!(!log.to_string().contains("Only here"));
+}
+
+#[test]
+fn doctor_reports_and_changes_nothing() {
+    let sb = Sandbox::new("doctor");
+    let status = |sb: &Sandbox| -> (bool, Value) {
+        let out = sb.son("alpha", &["--json", "doctor"]);
+        (
+            out.ok,
+            serde_json::from_str(&out.stdout).expect("doctor prints JSON"),
+        )
+    };
+    let of = |report: &Value, name: &str| -> String {
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| "absent".to_string())
+    };
+
+    // Nothing there yet: said so, and nothing made.
+    let (ok, report) = status(&sb);
+    assert!(ok);
+    assert_eq!(report["status"], "missing");
+    assert_eq!(of(&report, "database"), "missing");
+    assert_eq!(of(&report, "agent setup"), "missing");
+    assert!(!sb.root.join("son.db").exists());
+
+    sb.ok("alpha", &INIT_CLAUDE);
+    let id = sb
+        .ok(
+            "alpha",
+            &["remember", "fact", "Healthy fact", "--body", "All good."],
+        )
+        .id();
+    let (ok, report) = status(&sb);
+    assert!(ok, "{report}");
+    assert_eq!(report["status"], "healthy", "{report}");
+    for name in [
+        "database",
+        "schema",
+        "integrity",
+        "references",
+        "search index",
+        "skill file",
+        "instruction file",
+    ] {
+        assert_eq!(of(&report, name), "healthy", "{name}: {report}");
+    }
+    let text = sb.ok("alpha", &["doctor"]).stdout;
+    assert!(text.starts_with("# son doctor: healthy") && text.contains("Doctor changed nothing."));
+
+    // A search index that is behind.
+    let db_path = sb.root.join("son.db");
+    let raw = || rusqlite::Connection::open(&db_path).unwrap();
+    raw()
+        .execute(
+            "DELETE FROM nodes_fts WHERE node_id LIKE '%' || upper(?1)",
+            [&id],
+        )
+        .unwrap();
+    let (ok, report) = status(&sb);
+    assert!(ok);
+    assert_eq!(report["status"], "stale");
+    assert_eq!(of(&report, "search index"), "stale");
+    assert!(sb
+        .ok("alpha", &["doctor"])
+        .stdout
+        .contains("fix: son reindex"));
+    // Doctor did not repair it; the named command does.
+    assert_eq!(of(&status(&sb).1, "search index"), "stale");
+    sb.ok("alpha", &["reindex"]);
+    assert_eq!(of(&status(&sb).1, "search index"), "healthy");
+    raw()
+        .execute("UPDATE nodes_fts SET body = 'old words'", [])
+        .unwrap();
+    assert_eq!(of(&status(&sb).1, "search index"), "stale");
+    sb.ok("alpha", &["reindex"]);
+
+    // Files written by another version of son.
+    let home = sb.root.join("home");
+    let skill = home.join(".claude/skills/son/SKILL.md");
+    let rules = home.join(".claude/CLAUDE.md");
+    let good_rules = std::fs::read_to_string(&rules).unwrap();
+    std::fs::write(
+        &skill,
+        "---\nname: son\n---\n# son: shared memory\nold text\n",
+    )
+    .unwrap();
+    std::fs::write(&rules, good_rules.replace("son recall", "son rekall")).unwrap();
+    let (_, report) = status(&sb);
+    assert_eq!(of(&report, "skill file"), "stale");
+    assert_eq!(of(&report, "instruction file"), "stale");
+    assert!(std::fs::read_to_string(&skill)
+        .unwrap()
+        .contains("old text"));
+    std::fs::write(&rules, good_rules.split("<!-- son:end -->").next().unwrap()).unwrap();
+    let (ok, report) = status(&sb);
+    assert!(!ok);
+    assert_eq!(of(&report, "instruction file"), "problem");
+    sb.ok(
+        "alpha",
+        &[
+            "init",
+            "--agent",
+            "claude-code",
+            "--scope",
+            "global",
+            "--skill-only",
+        ],
+    );
+    std::fs::write(&rules, &good_rules).unwrap();
+    assert_eq!(status(&sb).1["status"], "healthy");
+
+    // An older schema: reported, and not upgraded by doctor.
+    raw().execute_batch("PRAGMA user_version = 8").unwrap();
+    let (ok, report) = status(&sb);
+    assert!(ok);
+    assert_eq!(of(&report, "schema"), "stale");
+    let version: i64 = raw()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+    raw().execute_batch("PRAGMA user_version = 9").unwrap();
+    raw().execute_batch("PRAGMA user_version = 999").unwrap();
+    let (ok, report) = status(&sb);
+    assert!(!ok);
+    assert_eq!(of(&report, "schema"), "problem");
+    raw().execute_batch("PRAGMA user_version = 9").unwrap();
+
+    // A row that points at nothing.
+    raw()
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF; \
+             INSERT INTO tags (node_id, tag) VALUES ('01NOSUCHNODE00000000000000', 'lost');",
+        )
+        .unwrap();
+    let out = sb.son("alpha", &["--json", "doctor"]);
+    assert!(!out.ok);
+    let report: Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(of(&report, "references"), "problem");
+    let error: Value = serde_json::from_str(&out.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "problems_found");
+    raw()
+        .execute("DELETE FROM tags WHERE tag = 'lost'", [])
+        .unwrap();
+
+    // A damaged file.
+    let before = std::fs::read(&db_path).unwrap();
+    let mut bytes = before.clone();
+    let middle = bytes.len() / 2;
+    for byte in &mut bytes[middle..middle + 3000] {
+        *byte = 0xAB;
+    }
+    std::fs::write(&db_path, &bytes).unwrap();
+    let out = sb.son("alpha", &["doctor"]);
+    assert!(!out.ok);
+    assert!(
+        out.stdout.contains("# son doctor: problem"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("son import <backup file> --replace"));
+    assert_eq!(
+        std::fs::read(&db_path).unwrap(),
+        bytes,
+        "doctor changed the file"
+    );
+    std::fs::write(&db_path, &before).unwrap();
+    assert_eq!(status(&sb).1["status"], "healthy");
+}
+
+#[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");

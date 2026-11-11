@@ -36,7 +36,9 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage a
 - `src/agents.rs` — the table of AI agents: skills folders, instruction files, detection
 - `src/setup.rs` — `son init`: choose agents and scope, then install
 - `src/instructions.rs` — the skill file and the instruction block, and how they are written
-- `src/transfer.rs` — export and import
+- `src/transfer.rs` — JSON export and import
+- `src/backup.rs` — `son backup`, and restoring a backup through `son import`
+- `src/doctor.rs` — `son doctor`: read-only checks of the database and the agent setup
 
 ## Backlog implementation
 

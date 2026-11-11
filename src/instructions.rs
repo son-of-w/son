@@ -108,6 +108,7 @@ Say how you learned what you save, so that a later session can judge it:
 
 - `son review` lists what needs a second look: stale nodes, facts and decisions that were not verified for a long time, old open todos, possible duplicates. Run it when you have time between tasks, or when the user asks to tidy up. For each node, check it against what is true now, then verify, edit, finish or merge it.
 - When you find that a stored node is out of date and you cannot fix it now, mark it: `son stale <id> --reason "<why>"`. A node labeled `STALE` in a recall needs a check before you rely on it.
+- If `son` fails in a way you do not understand, run `son doctor`: it checks the database and the setup, changes nothing, and names the command that fixes each fault. `son backup <file>` writes a full copy of the database; make one before a risky change if the user wants it.
 - `son history <id>` lists every change to a node; `son undo <id>` reverses the newest one. A wrong edit or drop is not lost: undo it.
 - `son todo list` shows open todos; `son collections` lists collections; `son list` shows recent changes.
 - Relations for `son link`: `relates_to`, `supersedes`, `depends_on`, `derived_from`, `belongs_to`.
