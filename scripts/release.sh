@@ -134,6 +134,12 @@ package() {
     fi
     say "Building $target"
     rustup target add "$target" >/dev/null
+    # SQLite is C code. For a musl build on Linux, compile it with musl-gcc,
+    # which the musl-tools package installs under that one name on every
+    # processor type.
+    if [ "$builder" = cargo ] && [[ "$target" == *-linux-musl ]] && command -v musl-gcc >/dev/null; then
+      export "CC_${target//-/_}=musl-gcc"
+    fi
     if [ "$builder" = zigbuild ]; then
       (cd "$src" && cargo zigbuild --release --locked --target "$target" --target-dir "$ROOT/target")
     else
