@@ -1,4 +1,3 @@
-- P1 #7 [Preserve change history and support undo](todos/7.md)
 - P2 #3 [Add a memory review and freshness workflow](todos/3.md)
 - P2 #4 [Add duplicate checks and explicit memory merging](todos/4.md)
 - P2 #6 [Add bounded and explainable retrieval](todos/6.md)

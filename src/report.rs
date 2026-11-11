@@ -1,8 +1,10 @@
 //! Output for `son list`, `son log` and `son stats`.
 
 use crate::activity::{Change, Count, EventRow, Page, Stats};
+use crate::history::{EdgeChange, Entry};
 use crate::render::{self, node_json, print_json};
 use crate::store;
+use crate::store::Node;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -126,6 +128,237 @@ pub fn events(page: &Page<EventRow>, command: &str, json: bool) {
         println!("{}", event_line(event));
     }
     page_footer(page, command);
+}
+
+fn quoted(text: &str) -> String {
+    format!("\"{}\"", render::clip(text, 60))
+}
+
+/// What an operation changed in a node, in a few words.
+fn changes(before: Option<&Node>, after: &Node) -> Vec<String> {
+    let Some(before) = before else {
+        return vec![format!("created [{}] {}", after.kind, quoted(&after.title))];
+    };
+    let mut parts = Vec::new();
+    if before.deleted_at.is_none() && after.deleted_at.is_some() {
+        parts.push("dropped".to_string());
+    }
+    if before.deleted_at.is_some() && after.deleted_at.is_none() {
+        parts.push("restored".to_string());
+    }
+    if before.title != after.title {
+        parts.push(format!(
+            "title {} → {}",
+            quoted(&before.title),
+            quoted(&after.title)
+        ));
+    }
+    if before.body != after.body {
+        parts.push(format!(
+            "body changed ({} → {} characters)",
+            before.body.chars().count(),
+            after.body.chars().count()
+        ));
+    }
+    let pair = |name: &str, old: Option<&str>, new: Option<&str>| {
+        (old != new).then(|| format!("{name} {} → {}", old.unwrap_or("-"), new.unwrap_or("-")))
+    };
+    parts.extend(pair("type", Some(&before.kind), Some(&after.kind)));
+    parts.extend(pair(
+        "status",
+        before.status.as_deref(),
+        after.status.as_deref(),
+    ));
+    if before.project_id != after.project_id {
+        parts.extend(pair(
+            "collection",
+            before.project.as_deref(),
+            after.project.as_deref(),
+        ));
+    }
+    if before.tags != after.tags {
+        parts.push(format!(
+            "tags {} → {}",
+            if before.tags.is_empty() {
+                "-".to_string()
+            } else {
+                before.tags.join(",")
+            },
+            if after.tags.is_empty() {
+                "-".to_string()
+            } else {
+                after.tags.join(",")
+            }
+        ));
+    }
+    if before.evidence != after.evidence {
+        parts.push(format!(
+            "evidence {} → {}",
+            store::evidence_label(before.evidence.as_deref()),
+            store::evidence_label(after.evidence.as_deref())
+        ));
+    }
+    if before.refs != after.refs {
+        parts.push(format!(
+            "evidence references {} → {}",
+            before.refs.len(),
+            after.refs.len()
+        ));
+    }
+    if before.verified_at != after.verified_at {
+        parts.push(match &after.verified_at {
+            Some(_) => "verified".to_string(),
+            None => "verification removed".to_string(),
+        });
+    }
+    parts
+}
+
+fn link_change(change: &EdgeChange, node: &Node) -> String {
+    let sign = if change.added { "linked" } else { "unlinked" };
+    if change.from_id == node.id {
+        format!(
+            "{sign}: {} `{}`",
+            change.relation,
+            store::short_id(&change.to_id)
+        )
+    } else {
+        format!(
+            "{sign}: `{}` {} this",
+            store::short_id(&change.from_id),
+            change.relation
+        )
+    }
+}
+
+fn entry_json(entry: &Entry) -> Value {
+    serde_json::to_value(entry).expect("a history entry always serializes")
+}
+
+fn entry_head(entry: &Entry) -> String {
+    let mut head = format!(
+        "#{} {} {}",
+        entry.op,
+        entry.at.get(..16).unwrap_or(&entry.at),
+        entry.kind
+    );
+    if let Some(undoes) = entry.undoes {
+        head.push_str(&format!(" of #{undoes}"));
+    }
+    if let Some(who) = entry.source.as_ref().or(entry.author.as_ref()) {
+        head.push_str(&format!(" by {who}"));
+    }
+    head
+}
+
+fn entry_notes(entry: &Entry) -> String {
+    let mut notes = String::new();
+    if entry.other_nodes > 0 {
+        notes.push_str(&format!(" (+{} other node(s))", entry.other_nodes));
+    }
+    if let Some(by) = entry.undone_by {
+        notes.push_str(&format!(" (undone by #{by})"));
+    }
+    if entry.purged {
+        notes.push_str(" (part purged; cannot be undone)");
+    }
+    notes
+}
+
+/// `son history <id>`: every operation that changed the node or its links.
+pub fn history(node: &Node, page: &Page<Entry>, command: &str, json: bool) {
+    if json {
+        let items = page.items.iter().map(entry_json).collect();
+        let mut value = page_json(page, items);
+        value["node"] = node_json(node);
+        print_json(&value);
+        return;
+    }
+    if page.total == 0 {
+        println!(
+            "No changes are recorded for {}.\nHistory is kept from son 0.1.6 on; a change made before that is not listed.",
+            render::line(node)
+        );
+        return;
+    }
+    page_header(&format!("History: {}", render::line(node)), page, "change");
+    if page.items.is_empty() {
+        println!("\nThis page is past the end.");
+    }
+    for entry in &page.items {
+        let mut what = match &entry.after {
+            Some(after) => changes(entry.before.as_ref(), after),
+            None => Vec::new(),
+        };
+        what.extend(entry.links.iter().map(|change| link_change(change, node)));
+        println!(
+            "- {}: {}{}",
+            entry_head(entry),
+            what.join("; "),
+            entry_notes(entry)
+        );
+    }
+    println!(
+        "\n`son history {} --op <number>` shows one change in full; `son undo {}` reverses the newest.",
+        node.short(),
+        node.short()
+    );
+    page_footer(page, command);
+}
+
+fn snapshot(label: &str, node: &Node) {
+    println!("\n## {label}");
+    let mut facts = vec![
+        format!("[{}]", node.kind),
+        format!("collection: {}", node.project_name()),
+        format!("rev {}", node.rev),
+    ];
+    if let Some(status) = &node.status {
+        facts.push(format!("status: {status}"));
+    }
+    if !node.tags.is_empty() {
+        facts.push(format!("tags: {}", node.tags.join(", ")));
+    }
+    facts.extend(render::trust(node));
+    if node.deleted_at.is_some() {
+        facts.push("DROPPED".to_string());
+    }
+    println!("{}\n{}", node.title, facts.join(" · "));
+    if !node.body.trim().is_empty() {
+        println!("\n{}", node.body.trim());
+    }
+    for r in &node.refs {
+        println!("- evidence {}: {}", r.kind, r.value);
+    }
+}
+
+/// `son history <id> --op <n>`: one operation, with the node in full
+/// before it and after it.
+pub fn history_entry(node: &Node, entry: &Entry, json: bool) {
+    if json {
+        let mut value = entry_json(entry);
+        value["node"] = node_json(node);
+        print_json(&value);
+        return;
+    }
+    println!("# {}{}", entry_head(entry), entry_notes(entry));
+    println!("{}", render::line(node));
+    match (&entry.before, &entry.after) {
+        (before, Some(after)) => {
+            match before {
+                Some(before) => snapshot("Before", before),
+                None => println!("\n## Before\n(the node did not exist)"),
+            }
+            snapshot("After", after);
+        }
+        _ => println!("\nThe node itself did not change."),
+    }
+    if !entry.links.is_empty() {
+        println!("\n## Links");
+        for change in &entry.links {
+            println!("- {}", link_change(change, node));
+        }
+    }
 }
 
 fn percent(share: Option<f64>) -> String {

@@ -233,6 +233,30 @@ pub enum Command {
     },
     /// Undo a drop
     Restore { id: String },
+    /// Show every change to a node and its links, newest first
+    History {
+        id: String,
+        /// Show one change in full: the node before it and after it
+        #[arg(long, value_name = "NUMBER")]
+        op: Option<i64>,
+        /// Changes on one page
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: u32,
+        /// Which page to show, from 1
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        page: u32,
+    },
+    /// Reverse the last change to a node (an edit, a drop, a link, a merge)
+    ///
+    /// The whole change is reversed: every node and link it touched. If
+    /// one of them changed again since, nothing is undone and the conflict
+    /// is reported. The undo is itself a change, listed by `son history`.
+    Undo {
+        id: String,
+        /// Reverse this change (a number from `son history`), not the last
+        #[arg(long, value_name = "NUMBER")]
+        op: Option<i64>,
+    },
     /// Manage todos
     Todo {
         #[command(subcommand)]

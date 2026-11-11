@@ -2,7 +2,8 @@
 //! for reading.
 
 use crate::analyze::Analyzer;
-use crate::store::{self, Node, NOW};
+use crate::history::{EdgeChange, Recorder};
+use crate::store::{self, Meta, Node, NOW};
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -173,7 +174,7 @@ pub struct ImportStats {
 /// incoming copy is newer. A collection in the file with the same name as a
 /// local collection is merged into the local one. Call [`Dump::upgrade`]
 /// first.
-pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportStats> {
+pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Result<ImportStats> {
     if dump.version != DUMP_VERSION {
         bail!("upgrade the export before importing it");
     }
@@ -181,6 +182,8 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
         // Rows may arrive before the rows they point at.
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut stats = ImportStats::default();
+        // The whole import is one operation in the history.
+        let mut rec = Recorder::new(conn, "import");
 
         let mut remap: HashMap<&str, String> = HashMap::new();
         for node in dump
@@ -202,6 +205,7 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
                 stats.merged_collections += 1;
                 continue;
             }
+            rec.touch(&node.id)?;
             match stored_updated_at(conn, &node.id)? {
                 Some(stored) if stored >= node.updated_at => {
                     // The content here is as new or newer. A verification
@@ -276,11 +280,22 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
             {
                 continue;
             }
-            stats.edges += conn.execute(
+            let added = conn.execute(
                 "INSERT OR IGNORE INTO edges (from_id, to_id, relation, created_at, origin) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![from, to, edge.relation, edge.created_at, edge.origin],
             )?;
+            if added > 0 {
+                stats.edges += 1;
+                rec.linked(EdgeChange {
+                    from_id: from,
+                    to_id: to,
+                    relation: edge.relation.clone(),
+                    added: true,
+                    created_at: edge.created_at.clone(),
+                    origin: edge.origin.clone(),
+                });
+            }
         }
 
         for synonym in &dump.synonyms {
@@ -289,6 +304,7 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
                 params![synonym.term, synonym.canonical],
             )?;
         }
+        rec.finish(meta)?;
         Ok(stats)
     })
 }

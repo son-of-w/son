@@ -82,7 +82,7 @@ pub struct Page<T> {
 }
 
 impl<T> Page<T> {
-    fn new(items: Vec<T>, total: i64, limit: usize, page: usize) -> Self {
+    pub(crate) fn new(items: Vec<T>, total: i64, limit: usize, page: usize) -> Self {
         let total = total.max(0) as usize;
         Self {
             page,

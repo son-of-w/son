@@ -3,7 +3,7 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -131,6 +131,47 @@ CREATE TABLE refs (
 /// they are internal.
 const SCHEMA_V5: &str = "
 UPDATE nodes SET type = 'collection' WHERE type = 'project';
+";
+
+/// Version 6 adds change history. An `ops` row is one command that changed
+/// nodes or links. `revisions` holds each changed node before and after, as
+/// JSON; `edge_changes` holds each link added or removed. Nothing is pruned.
+/// `revisions.node_id` has no foreign key: `son drop --purge` deletes the
+/// node and these rows together. A database from before this version starts
+/// with no history; the first change to a node records how it was.
+const SCHEMA_V6: &str = "
+CREATE TABLE ops (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    source     TEXT,
+    author     TEXT,
+    undoes     INTEGER,
+    undone_by  INTEGER,
+    purged     INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE revisions (
+    id       INTEGER PRIMARY KEY,
+    op_id    INTEGER NOT NULL REFERENCES ops(id),
+    node_id  TEXT NOT NULL,
+    before   TEXT,
+    after    TEXT NOT NULL
+);
+CREATE INDEX revisions_node ON revisions(node_id);
+CREATE INDEX revisions_op ON revisions(op_id);
+CREATE TABLE edge_changes (
+    id          INTEGER PRIMARY KEY,
+    op_id       INTEGER NOT NULL REFERENCES ops(id),
+    from_id     TEXT NOT NULL,
+    to_id       TEXT NOT NULL,
+    relation    TEXT NOT NULL,
+    added       INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    origin      TEXT NOT NULL DEFAULT 'local'
+);
+CREATE INDEX edge_changes_op ON edge_changes(op_id);
+CREATE INDEX edge_changes_from ON edge_changes(from_id);
+CREATE INDEX edge_changes_to ON edge_changes(to_id);
 ";
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
@@ -261,6 +302,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         if version < 5 {
             conn.execute_batch(SCHEMA_V5)?;
+        }
+        if version < 6 {
+            conn.execute_batch(SCHEMA_V6)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

@@ -100,6 +100,7 @@ son init --yes
 - **Links connect nodes.** `son link <from> <relation> <to>` with `relates_to`, `supersedes`, `depends_on`, `derived_from` or `belongs_to`. Recall follows links one hop (or two) from its matches. A superseded decision is kept and ranked lower.
 - **Every node can say where it came from.** `--evidence` records how it was learned: `user-statement`, `observation` or `inference`; without it the node is "unknown". `--ref <kind>:<value>` points at the evidence (`file`, `url`, `conversation`, `user`, `other`); `son` stores the pointer and never opens it. `son verify <id> --checked "<what was checked>"` records an explicit check, with its own date. An edit never marks a node verified. These fields describe recorded evidence; `son` does not test whether a node is true.
 - **Nothing is lost by default.** `son drop` is a soft delete; `son restore` brings a node back.
+- **Every change is kept and can be undone.** `son history <id>` lists each change to a node and its links, newest first, with who made it; `--op <number>` shows the node in full before and after one change. `son undo <id>` reverses the newest change: an edit, a drop, a restore, a link, a verification, an import. It reverses the whole change (every node and link that change touched) or nothing: if a node or link was changed again since, it reports the conflict and leaves everything as it is. An undo is itself a change in the history, so it can be undone too (`son undo <id> --op <number>`). History is never pruned. `son drop <id> --purge` is the one way to erase: it removes the node and its history from the database (not from backups you made before); a change that also touched the purged node can then no longer be undone.
 
 ## Commands
 
@@ -113,6 +114,8 @@ son edit <id> [--title] [--body] [--type] [--status] [--collection] [--tag] [--e
 son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
 son drop <id> [--purge]
 son restore <id>
+son history <id> [--op <number>] [--limit 20] [--page 1]
+son undo <id> [--op <number>]
 son todo add "<title>" [--collection <name>] [--tag a,b]
 son todo list [--collection <name>] [--all] [--done]
 son todo done <id>

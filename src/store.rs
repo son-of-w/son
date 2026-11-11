@@ -271,6 +271,41 @@ pub fn get_node(conn: &Connection, id: &str) -> Result<Node> {
     Ok(conn.query_row(&sql, [id], node_from_row)?)
 }
 
+/// The node `id`, or `None` when there is no such node (it was purged).
+pub fn find_node(conn: &Connection, id: &str) -> Result<Option<Node>> {
+    let sql = format!("SELECT {COLS} {FROM} WHERE n.id = ?1");
+    Ok(conn.query_row(&sql, [id], node_from_row).optional()?)
+}
+
+/// Make the stored node equal to `node`, an earlier state of it: every
+/// field that is content, the verification and the dropped state too. Used
+/// by undo. The change is a new revision.
+pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> {
+    conn.execute(
+        &format!(
+            "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
+             evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
+             deleted_at = ?11, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+        ),
+        params![
+            node.id,
+            node.kind,
+            node.title,
+            node.body,
+            node.status,
+            node.project_id,
+            node.evidence,
+            node.verified_at,
+            node.verified_by,
+            node.verified_note,
+            node.deleted_at
+        ],
+    )?;
+    set_tags(conn, &node.id, &node.tags)?;
+    set_refs(conn, &node.id, &node.refs)?;
+    reindex(conn, an, &node.id)
+}
+
 pub fn find_project(conn: &Connection, name: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row(

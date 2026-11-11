@@ -30,6 +30,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage a
 - `src/render.rs` — markdown and JSON output
 - `src/activity.rs` — the activity log, paging, and the numbers for `son stats`
 - `src/report.rs` — output for `son list`, `son log`, `son stats`
+- `src/history.rs` — change history: what each command changed, and undo
 - `src/agents.rs` — the table of AI agents: skills folders, instruction files, detection
 - `src/setup.rs` — `son init`: choose agents and scope, then install
 - `src/instructions.rs` — the skill file and the instruction block, and how they are written

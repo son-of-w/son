@@ -915,6 +915,381 @@ fn provenance_is_recorded_and_verification_is_explicit() {
     assert!(cleared["verified_at"].is_null() && cleared["verified_note"].is_null());
 }
 
+/// The newest operation number in a node's history.
+fn newest_op(sb: &Sandbox, id: &str) -> i64 {
+    sb.ok("alpha", &["--json", "history", id]).json()["items"][0]["op"]
+        .as_i64()
+        .unwrap()
+}
+
+#[test]
+fn history_keeps_every_change_and_undo_walks_back() {
+    let sb = Sandbox::new("history");
+    let id = sb
+        .ok(
+            "alpha",
+            &["remember", "fact", "Port is 8080", "--body", "First."],
+        )
+        .id();
+    sb.ok("alpha", &["edit", &id, "--title", "Port is 8443"]);
+    sb.ok("alpha", &["edit", &id, "--body", "Second.", "--tag", "net"]);
+
+    let history = sb.ok("alpha", &["history", &id]).stdout;
+    assert!(history.contains("(3 changes)"), "{history}");
+    assert!(
+        history.contains("title \"Port is 8080\" → \"Port is 8443\""),
+        "{history}"
+    );
+    assert!(history.contains("body changed") && history.contains("tags - → net"));
+    assert!(history.contains("created [fact] \"Port is 8080\""));
+    // Newest first.
+    assert!(position(&history, "body changed") < position(&history, "created [fact]"));
+
+    // An edit that changes nothing, and one that fails, leave no revision.
+    let same = sb.ok("alpha", &["edit", &id, "--body", "Second."]).stdout;
+    assert!(same.starts_with("unchanged"), "{same}");
+    assert!(
+        !sb.son(
+            "alpha",
+            &["edit", &id, "--type", "todo", "--status", "bogus"]
+        )
+        .ok
+    );
+    let page = sb.ok("alpha", &["--json", "history", &id]).json();
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["items"][0]["before"]["body"], "First.");
+    assert_eq!(page["items"][0]["after"]["body"], "Second.");
+    let rev = sb.ok("alpha", &["--json", "show", &id]).json()["rev"].clone();
+    assert_eq!(rev, 3);
+
+    // One change in full.
+    let op = newest_op(&sb, &id);
+    let full = sb
+        .ok("alpha", &["history", &id, "--op", &op.to_string()])
+        .stdout;
+    assert!(full.contains("## Before") && full.contains("First."));
+    assert!(full.contains("## After") && full.contains("Second."));
+
+    // Undo walks back one change at a time; each undo is a new change.
+    let out = sb.ok("alpha", &["undo", &id]).stdout;
+    assert!(out.contains(&format!("undid #{op} (edit)")), "{out}");
+    let now = sb.ok("alpha", &["--json", "show", &id]).json();
+    assert_eq!(now["body"], "First.");
+    assert_eq!(now["tags"].as_array().unwrap().len(), 0);
+    assert_eq!(now["title"], "Port is 8443");
+    assert_eq!(now["rev"], 4);
+    sb.ok("alpha", &["undo", &id]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &id]).json()["title"],
+        "Port is 8080"
+    );
+    let history = sb.ok("alpha", &["history", &id]).stdout;
+    assert!(
+        history.contains("(5 changes)") && history.contains("(undone by #"),
+        "{history}"
+    );
+    assert!(history.contains(&format!("undo of #{op}")));
+    // The search index follows.
+    assert!(sb
+        .ok("alpha", &["recall", "8080"])
+        .stdout
+        .contains("Port is 8080"));
+    assert!(sb
+        .ok("alpha", &["recall", "8443"])
+        .stdout
+        .contains("No matches"));
+
+    // Undoing an undo puts the change back.
+    let last_undo = newest_op(&sb, &id);
+    sb.ok("alpha", &["undo", &id, "--op", &last_undo.to_string()]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &id]).json()["title"],
+        "Port is 8443"
+    );
+    assert!(sb
+        .son("alpha", &["undo", &id, "--op", &last_undo.to_string()])
+        .stderr
+        .contains("already undone"));
+
+    // Undoing the creation drops the node; nothing is erased.
+    sb.ok("alpha", &["undo", &id]);
+    let out = sb.ok("alpha", &["undo", &id]).stdout;
+    assert!(
+        out.contains("(create)") && out.contains("(dropped)"),
+        "{out}"
+    );
+    assert!(sb
+        .ok("alpha", &["recall", "port"])
+        .stdout
+        .contains("No matches"));
+    assert!(sb
+        .son("alpha", &["undo", &id])
+        .stderr
+        .contains("nothing to undo"));
+    assert!(
+        sb.ok("alpha", &["--json", "history", &id]).json()["total"]
+            .as_i64()
+            .unwrap()
+            >= 8
+    );
+
+    // Every command gives valid JSON.
+    let undo_op = newest_op(&sb, &id);
+    let redo = sb
+        .ok(
+            "alpha",
+            &["--json", "undo", &id, "--op", &undo_op.to_string()],
+        )
+        .json();
+    assert_eq!(redo["undid"], undo_op);
+    assert_eq!(redo["nodes"][0]["deleted_at"], serde_json::Value::Null);
+    sb.ok(
+        "alpha",
+        &["--json", "history", &id, "--op", &undo_op.to_string()],
+    )
+    .json();
+}
+
+#[test]
+fn undo_reports_a_conflict_and_changes_nothing() {
+    let sb = Sandbox::new("undo-conflict");
+    let id = sb
+        .ok(
+            "alpha",
+            &["remember", "note", "Shared note", "--body", "v1"],
+        )
+        .id();
+    sb.ok("alpha", &["edit", &id, "--body", "v2 from session A"]);
+    let a = newest_op(&sb, &id);
+    // Another session edits after A.
+    sb.ok("beta", &["edit", &id, "--body", "v3 from session B"]);
+
+    let out = sb.son("alpha", &["undo", &id, "--op", &a.to_string()]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("was changed after it"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("Nothing was changed"));
+    let now = sb.ok("alpha", &["--json", "show", &id]).json();
+    assert_eq!(now["body"], "v3 from session B");
+    assert_eq!(now["rev"], 3);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "history", &id]).json()["total"],
+        3
+    );
+
+    // The newest change can still be undone, and then the older one.
+    sb.ok("alpha", &["undo", &id]);
+    sb.ok("alpha", &["undo", &id, "--op", &a.to_string()]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &id]).json()["body"],
+        "v1"
+    );
+    assert!(!sb.son("alpha", &["undo", &id, "--op", "9999"]).ok);
+}
+
+#[test]
+fn undo_covers_links_drops_moves_and_verification() {
+    let sb = Sandbox::new("undo-links");
+    let a = sb
+        .ok("alpha", &["remember", "decision", "Use Postgres"])
+        .id();
+    let b = sb.ok("alpha", &["remember", "decision", "Use SQLite"]).id();
+
+    // A link.
+    sb.ok("alpha", &["link", &b, "supersedes", &a]);
+    assert!(sb.ok("alpha", &["show", &a]).stdout.contains("SUPERSEDED"));
+    let history = sb.ok("alpha", &["history", &a]).stdout;
+    assert!(
+        history.contains("linked: `") && history.contains("supersedes this"),
+        "{history}"
+    );
+    let link_op = newest_op(&sb, &a);
+    // Linking again changes nothing and is not recorded.
+    sb.ok("alpha", &["link", &b, "supersedes", &a]);
+    assert_eq!(newest_op(&sb, &a), link_op);
+    sb.ok("alpha", &["undo", &a]);
+    assert!(!sb.ok("alpha", &["show", &a]).stdout.contains("SUPERSEDED"));
+    assert!(sb
+        .ok("alpha", &["history", &b])
+        .stdout
+        .contains("unlinked: supersedes"));
+
+    // A link that was changed by hand since cannot be undone twice.
+    let relink = newest_op(&sb, &a);
+    sb.ok("alpha", &["undo", &a, "--op", &relink.to_string()]);
+    sb.ok("alpha", &["unlink", &b, "supersedes", &a]);
+    let redo = newest_op(&sb, &a) - 1;
+    let out = sb.son("alpha", &["undo", &a, "--op", &redo.to_string()]);
+    assert!(
+        out.stderr.contains("the link") && out.stderr.contains("was changed after it"),
+        "{}",
+        out.stderr
+    );
+
+    // A drop, and a restore.
+    sb.ok("alpha", &["drop", &a]);
+    sb.ok("alpha", &["undo", &a]);
+    assert!(sb.ok("alpha", &["--json", "show", &a]).json()["deleted_at"].is_null());
+    sb.ok("alpha", &["drop", &a]);
+    sb.ok("alpha", &["restore", &a]);
+    sb.ok("alpha", &["undo", &a]);
+    assert!(sb.ok("alpha", &["--json", "show", &a]).json()["deleted_at"].is_string());
+    sb.ok("alpha", &["restore", &a]);
+
+    // A move to another collection, and a verification.
+    sb.ok("alpha", &["edit", &b, "--collection", "gamma"]);
+    assert!(sb
+        .ok("alpha", &["history", &b])
+        .stdout
+        .contains("collection alpha → gamma"));
+    sb.ok("alpha", &["undo", &b]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &b]).json()["collection"],
+        "alpha"
+    );
+    // The collection that the move made stays: it was its own change.
+    assert!(sb.ok("alpha", &["collections"]).stdout.contains("gamma"));
+    sb.ok("alpha", &["verify", &b, "--checked", "read the config"]);
+    sb.ok("alpha", &["undo", &b]);
+    assert!(sb.ok("alpha", &["--json", "show", &b]).json()["verified_at"].is_null());
+    sb.ok("alpha", &["todo", "add", "Ship it"]);
+    let todo = sb.ok("alpha", &["--json", "todo", "list"]).json()[0]["short_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    sb.ok("alpha", &["todo", "done", &todo]);
+    sb.ok("alpha", &["todo", "done", &todo]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "history", &todo]).json()["total"],
+        2
+    );
+    sb.ok("alpha", &["undo", &todo]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &todo]).json()["status"],
+        "open"
+    );
+}
+
+#[test]
+fn old_revisions_stay_and_purge_erases_history() {
+    let sb = Sandbox::new("history-purge");
+    let id = sb
+        .ok("alpha", &["remember", "note", "Counter", "--body", "0"])
+        .id();
+    for n in 1..=30 {
+        sb.ok("alpha", &["edit", &id, "--body", &n.to_string()]);
+    }
+    // Nothing is pruned: the first change is still there, on a later page.
+    let page = sb
+        .ok("alpha", &["--json", "history", &id, "--page", "2"])
+        .json();
+    assert_eq!(page["total"], 31);
+    assert_eq!(page["pages"], 2);
+    let first = page["items"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(first["kind"], "create");
+    assert_eq!(first["after"]["body"], "0");
+    assert!(sb
+        .ok("alpha", &["history", &id])
+        .stdout
+        .contains("Next page: `son history"));
+    let oldest_edit = page["items"].as_array().unwrap()[9]["op"].as_i64().unwrap();
+    let shown = sb
+        .ok(
+            "alpha",
+            &["--json", "history", &id, "--op", &oldest_edit.to_string()],
+        )
+        .json();
+    assert_eq!(shown["before"]["body"], "0");
+
+    // A node made with a link: one operation that touches two nodes.
+    let other = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "note",
+                "Depends on counter",
+                "--link",
+                &format!("{id}:depends_on"),
+            ],
+        )
+        .id();
+    let export = sb.root.join("before-purge.json");
+    std::fs::write(&export, sb.ok("alpha", &["export", "--json"]).stdout).unwrap();
+    let saved = std::fs::read(&export).unwrap();
+
+    sb.ok("alpha", &["drop", &id, "--purge"]);
+    assert!(!sb.son("alpha", &["history", &id]).ok);
+    let db = rusqlite::Connection::open(sb.root.join("son.db")).unwrap();
+    let left: i64 = db
+        .query_row(
+            "SELECT (SELECT count(*) FROM revisions WHERE node_id LIKE '%' || upper(?1)) \
+                  + (SELECT count(*) FROM edge_changes WHERE from_id LIKE '%' || upper(?1) OR to_id LIKE '%' || upper(?1)) \
+                  + (SELECT count(*) FROM events WHERE node_id LIKE '%' || upper(?1))",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0);
+    let bodies: i64 = db
+        .query_row(
+            "SELECT count(*) FROM revisions WHERE after LIKE '%\"title\":\"Counter\"%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(bodies, 0);
+    drop(db);
+
+    // The other node's creation also made the link to the purged node, so
+    // it cannot be reversed in full, and is not reversed in part.
+    let out = sb.son("alpha", &["undo", &other]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("restoration is unavailable"),
+        "{}",
+        out.stderr
+    );
+    assert!(sb.ok("alpha", &["--json", "show", &other]).json()["deleted_at"].is_null());
+    assert!(sb
+        .ok("alpha", &["history", &other])
+        .stdout
+        .contains("cannot be undone"));
+    // A file made before the purge is not touched by it.
+    assert_eq!(std::fs::read(&export).unwrap(), saved);
+}
+
+#[test]
+fn an_import_is_one_change_that_can_be_undone() {
+    let sb = Sandbox::new("history-import");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");
+    let fixture = root.join("fixtures/instruction-like-note.json");
+    sb.ok("alpha", &["import", fixture.to_str().unwrap()]);
+    let history = sb.ok("alpha", &["history", "NJECT1"]).stdout;
+    assert!(
+        history.contains(" import ") && history.contains("created [note]"),
+        "{history}"
+    );
+    assert!(history.contains("(+1 other node(s))"), "{history}");
+    // A second import of the same file changes nothing and records nothing.
+    sb.ok("alpha", &["import", fixture.to_str().unwrap()]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "history", "NJECT1"]).json()["total"],
+        1
+    );
+    // The collection still holds the note, so the import cannot be undone
+    // through the note alone without dropping both: it drops both.
+    let out = sb.ok("alpha", &["undo", "NJECT1"]).stdout;
+    assert!(out.contains("(import)"), "{out}");
+    assert!(sb
+        .ok("alpha", &["recall", "deploy", "cleanup"])
+        .stdout
+        .contains("No matches"));
+}
+
 #[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");

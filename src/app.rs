@@ -6,6 +6,7 @@ use crate::analyze::Analyzer;
 use crate::cli::{
     Cli, Command, Evidence, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand,
 };
+use crate::history::{self, Recorder};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
 use crate::store::{self, Meta, NewNode, Node, Ref, TODO_STATUSES};
@@ -47,6 +48,8 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Verify { .. } => ("verify", true),
         Command::Drop { .. } => ("drop", true),
         Command::Restore { .. } => ("restore", true),
+        Command::History { .. } => ("history", false),
+        Command::Undo { .. } => ("undo", true),
         Command::Todo { command } => match command {
             TodoCommand::Add { .. } => ("todo add", true),
             TodoCommand::List { .. } => ("todo list", false),
@@ -219,6 +222,13 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         } => app.verify(&id, checked.as_deref(), &refs, clear),
         Command::Drop { id, purge } => app.drop_node(&id, purge),
         Command::Restore { id } => app.restore(&id),
+        Command::History {
+            id,
+            op,
+            limit,
+            page,
+        } => app.history(&id, op, limit as usize, page as usize),
+        Command::Undo { id, op } => app.undo(&id, op),
         Command::Todo { command } => match command {
             TodoCommand::Add {
                 title,
@@ -494,6 +504,7 @@ impl App {
         let evidence = new.evidence.and_then(Evidence::stored);
         let refs = parse_refs(new.refs)?;
         let id = store::write(&self.conn, || {
+            let mut rec = Recorder::new(&self.conn, "create");
             let id = if kind == NodeType::Collection {
                 if project.is_some() {
                     bail!("a collection cannot be inside another collection");
@@ -515,7 +526,7 @@ impl App {
                     refs: &refs,
                 })?
             } else {
-                let project_id = store::ensure_project(
+                let project_id = history::ensure_collection(
                     &self.conn,
                     &self.an,
                     &self.meta,
@@ -532,11 +543,13 @@ impl App {
                     refs: &refs,
                 })?
             };
+            rec.created(&id);
             for link in links {
                 let (target, relation) = parse_link(link)?;
                 let to = store::resolve_id(&self.conn, target)?;
-                store::link(&self.conn, &id, relation.as_str(), &to)?;
+                rec.link(&id, relation.as_str(), &to)?;
             }
+            rec.finish(&self.meta)?;
             Ok(id)
         })?;
         let node = store::get_node(&self.conn, &id)?;
@@ -562,16 +575,23 @@ impl App {
             bail!("a collection is a container; verify the nodes in it");
         }
         store::write(&self.conn, || {
+            let mut rec = Recorder::new(&self.conn, if clear { "unverify" } else { "verify" });
+            rec.touch(&id)?;
             if clear {
-                return store::unverify(&self.conn, &id);
+                if node.verified_at.is_some() {
+                    store::unverify(&self.conn, &id)?;
+                }
+            } else {
+                if !added.is_empty() {
+                    let mut refs = node.refs.clone();
+                    refs.extend(added.iter().cloned());
+                    store::set_refs(&self.conn, &id, &refs)?;
+                }
+                let by = self.meta.source.as_deref().or(self.meta.author.as_deref());
+                store::verify(&self.conn, &id, by, checked)?;
             }
-            if !added.is_empty() {
-                let mut refs = node.refs.clone();
-                refs.extend(added.iter().cloned());
-                store::set_refs(&self.conn, &id, &refs)?;
-            }
-            let by = self.meta.source.as_deref().or(self.meta.author.as_deref());
-            store::verify(&self.conn, &id, by, checked)
+            rec.finish(&self.meta)?;
+            Ok(())
         })?;
         let verb = if clear {
             "verification removed from"
@@ -662,8 +682,11 @@ impl App {
         }
         let (refs, unref) = (parse_refs(&refs)?, parse_refs(&unref)?);
         let id = store::resolve_id(&self.conn, id)?;
-        store::write(&self.conn, || {
+        let changed = store::write(&self.conn, || {
+            let mut rec = Recorder::new(&self.conn, "edit");
+            rec.touch(&id)?;
             let mut node = store::get_node(&self.conn, &id)?;
+            let original = node.clone();
             let is_project = node.kind == "collection";
 
             if let Some(title) = title {
@@ -711,7 +734,7 @@ impl App {
                     bail!("a collection cannot be inside another collection");
                 }
                 let name = project_name(Some(&project))?;
-                node.project_id = Some(store::ensure_project(
+                node.project_id = Some(history::ensure_collection(
                     &self.conn, &self.an, &self.meta, &name,
                 )?);
             }
@@ -733,11 +756,24 @@ impl App {
             }
             node.refs.retain(|r| !unref.contains(r));
             node.refs.extend(refs.iter().cloned());
-            store::update_node(&self.conn, &self.an, &node)
+            node.refs.sort();
+            node.refs.dedup();
+            node.tags = store::clean_tags(&node.tags);
+            // An edit that changes nothing is not a revision.
+            if history::same_content(&original, &node) {
+                return Ok(false);
+            }
+            store::update_node(&self.conn, &self.an, &node)?;
+            rec.finish(&self.meta)?;
+            Ok(true)
         })?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
-        render::saved("updated", &node, self.json);
+        render::saved(
+            if changed { "updated" } else { "unchanged" },
+            &node,
+            self.json,
+        );
         Ok(())
     }
 
@@ -747,8 +783,10 @@ impl App {
         self.note_node(&node);
         store::write(&self.conn, || {
             if purge {
-                return store::purge(&self.conn, &id);
+                return history::purge(&self.conn, &id);
             }
+            let mut rec = Recorder::new(&self.conn, "drop");
+            rec.touch(&id)?;
             if node.deleted_at.is_some() {
                 bail!("`{}` is already dropped", node.short());
             }
@@ -761,8 +799,17 @@ impl App {
                     );
                 }
             }
-            store::soft_drop(&self.conn, &self.an, &id)
+            store::soft_drop(&self.conn, &self.an, &id)?;
+            rec.finish(&self.meta)?;
+            Ok(())
         })?;
+        if purge {
+            // A purged node leaves no trace, in the activity log either.
+            self.note(|draft| {
+                draft.node_id = None;
+                draft.detail = None;
+            });
+        }
         if self.json {
             render::print_json(&json!({
                 "id": node.id,
@@ -773,7 +820,7 @@ impl App {
             println!("purged {}", render::line(&node));
         } else {
             println!(
-                "dropped {} (undo with `son restore {}`)",
+                "dropped {} (bring it back with `son restore {}`)",
                 render::line(&node),
                 node.short()
             );
@@ -793,9 +840,70 @@ impl App {
             {
                 bail!("another collection is now called '{}'", node.title);
             }
-            store::restore(&self.conn, &self.an, &id)
+            let mut rec = Recorder::new(&self.conn, "restore");
+            rec.touch(&id)?;
+            store::restore(&self.conn, &self.an, &id)?;
+            rec.finish(&self.meta)?;
+            Ok(())
         })?;
         render::saved("restored", &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
+    }
+
+    fn history(&self, id: &str, op: Option<i64>, limit: usize, page: usize) -> Result<()> {
+        let id = store::resolve_id(&self.conn, id)?;
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        if let Some(op) = op {
+            let entry = history::entry(&self.conn, &id, op)?;
+            report::history_entry(&node, &entry, self.json);
+            return Ok(());
+        }
+        let entries = history::entries_page(&self.conn, &id, limit, page)?;
+        self.note(|draft| draft.results = Some(entries.items.len() as i64));
+        let mut again = format!("son history {}", node.short());
+        if limit != 20 {
+            again.push_str(&format!(" --limit {limit}"));
+        }
+        report::history(&node, &entries, &again, self.json);
+        Ok(())
+    }
+
+    fn undo(&self, id: &str, op: Option<i64>) -> Result<()> {
+        let id = store::resolve_id(&self.conn, id)?;
+        self.note_node(&store::get_node(&self.conn, &id)?);
+        let undone = store::write(&self.conn, || {
+            history::undo(&self.conn, &self.an, &self.meta, &id, op)
+        })?;
+        if self.json {
+            render::print_json(&json!({
+                "op": undone.op,
+                "undid": undone.undid,
+                "kind": undone.kind,
+                "nodes": undone.nodes.iter().map(render::node_json).collect::<Vec<_>>(),
+                "links": undone.links,
+            }));
+        } else {
+            println!(
+                "undid #{} ({}) as #{}; undo that with `son undo {} --op {}`",
+                undone.undid,
+                undone.kind,
+                undone.op,
+                store::short_id(&id),
+                undone.op
+            );
+            for node in &undone.nodes {
+                let state = if node.deleted_at.is_some() {
+                    " (dropped)"
+                } else {
+                    ""
+                };
+                println!("- {}{state}", render::line(node));
+            }
+            if undone.links > 0 {
+                println!("- {} link change(s) reversed", undone.links);
+            }
+        }
         Ok(())
     }
 
@@ -833,7 +941,15 @@ impl App {
         if node.kind != "todo" {
             bail!("`{}` is a {}, not a todo", node.short(), node.kind);
         }
-        store::write(&self.conn, || store::set_status(&self.conn, &id, "done"))?;
+        if node.status.as_deref() != Some("done") {
+            store::write(&self.conn, || {
+                let mut rec = Recorder::new(&self.conn, "done");
+                rec.touch(&id)?;
+                store::set_status(&self.conn, &id, "done")?;
+                rec.finish(&self.meta)?;
+                Ok(())
+            })?;
+        }
         render::saved("done", &store::get_node(&self.conn, &id)?, self.json);
         Ok(())
     }
@@ -842,11 +958,14 @@ impl App {
         let from = store::resolve_id(&self.conn, from)?;
         let to = store::resolve_id(&self.conn, to)?;
         let changed = store::write(&self.conn, || {
-            if add {
-                store::link(&self.conn, &from, relation.as_str(), &to)
+            let mut rec = Recorder::new(&self.conn, if add { "link" } else { "unlink" });
+            let changed = if add {
+                rec.link(&from, relation.as_str(), &to)?
             } else {
-                store::unlink(&self.conn, &from, relation.as_str(), &to)
-            }
+                rec.unlink(&from, relation.as_str(), &to)?
+            };
+            rec.finish(&self.meta)?;
+            Ok(changed)
         })?;
         let (from, to) = (
             store::get_node(&self.conn, &from)?,
@@ -960,7 +1079,7 @@ impl App {
             .context("this is not a son JSON export (make one with `son export --json`)")?;
         dump.upgrade()?;
         self.note(|draft| draft.detail = Some(file.to_string()));
-        let stats = transfer::import(&self.conn, &self.an, &dump)?;
+        let stats = transfer::import(&self.conn, &self.an, &self.meta, &dump)?;
         self.note(|draft| draft.results = Some((stats.added + stats.updated) as i64));
         if self.json {
             render::print_json(&serde_json::to_value(&stats)?);
