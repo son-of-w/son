@@ -14,8 +14,9 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 
 - After each feature is implemented and `make check` passes, commit it and push to `main` without asking. Do not push a state that fails the checks.
 - Each feature commit also raises the version in `Cargo.toml`. Raise the patch number (0.1.0 to 0.1.1) by default. Raise the minor number (0.1.4 to 0.2.0) only for a large new capability or a change that breaks existing use, such as a removed or renamed command or flag. Then run `cargo build` so `Cargo.lock` carries the new version; CI builds with `--locked` and fails if it does not. Changes to docs only do not raise the version.
+- Stage files by name. Do not use `git add -A`: other sessions may have work in progress in this folder (for example in `TODO.md` or `PLAN.md`), and it is not ours to commit.
 - No Claude or Claude Code attribution anywhere: no `Co-Authored-By` trailer, no "Generated with" line in commits, pull requests, or release notes.
-- Every version bump is a release. After the commit with the new version is pushed, tag it and push the tag: `git tag v<version> && git push origin v<version>`. The tag must match the version in `Cargo.toml`. The Release workflow then tests, builds both Mac binaries, and publishes a GitHub release. Check that the workflow passed; a failed release needs a fix and a new patch version, not a moved tag.
+- Every version bump is a release. After the commit with the new version is pushed, tag it and push the tag: `git tag v<version> && git push origin v<version>`. The tag must match the version in `Cargo.toml`. The Release workflow then tests, builds both Mac binaries, and publishes a GitHub release. Check that the workflow passed; a failed release needs a fix and a new patch version, not a moved tag. If GitHub Actions is not working, run `make publish` on the Mac: it makes the same release with `scripts/release.sh`.
 
 ## Layout
 

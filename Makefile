@@ -7,7 +7,7 @@ CARGO ?= cargo
 BIN   := son
 
 .DEFAULT_GOAL := help
-.PHONY: help build release test fmt lint check install uninstall clean
+.PHONY: help build release test fmt lint check install uninstall clean dist publish
 
 help: ## Show the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -51,5 +51,12 @@ else
 	$(CARGO) uninstall son-of-w
 endif
 
+dist: ## Build both Mac binaries into dist/ for the current version
+	scripts/release.sh package
+
+publish: ## Check, build, tag v<version> and publish a GitHub release from this Mac
+	scripts/release.sh
+
 clean: ## Remove build output
 	$(CARGO) clean
+	rm -rf dist

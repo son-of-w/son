@@ -119,6 +119,16 @@ Do not store secrets. The database is plain text.
 make check
 ```
 
-`make check` runs what CI runs: the format check, clippy, and all tests. `make` on its own lists every target: `build`, `release`, `test`, `fmt`, `lint`, `check`, `install`, `uninstall`, `clean`.
+`make check` runs what CI runs: the format check, clippy, and all tests. `make` on its own lists every target.
+
+### Releasing
+
+Pushing a tag `v<version>` starts the Release workflow, which builds both Mac binaries and publishes a GitHub release. When GitHub Actions is not working, the same release can be made from a Mac:
+
+```bash
+make publish
+```
+
+It runs the checks, builds both binaries from the tagged commit, creates and pushes the tag `v<version>` if it is missing, stops any Release workflow run for that tag, and publishes the release with the GitHub CLI (`gh`). It is safe to run again. `make dist` only builds the archives into `dist/`. Both use [scripts/release.sh](scripts/release.sh), the same script the workflow runs.
 
 [PLAN.md](PLAN.md) holds the design and the plan for version 2 (an optional central store with sync).
