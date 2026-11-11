@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# In zsh, give the three arguments as three words; a variable that holds
+# "coding claude codex" is one word there.
+#
 # Run one evaluation of the memory loop: one agent writes, then a fresh
 # session of the other agent reads. See eval/README.md.
 #
@@ -18,7 +21,9 @@
 #
 # The commands that start an agent can be replaced:
 #   EVAL_CLAUDE_CMD   default: claude -p --permission-mode bypassPermissions
-#   EVAL_CODEX_CMD    default: codex exec --full-auto
+#   EVAL_CODEX_CMD    default: codex exec --sandbox workspace-write
+#                              --skip-git-repo-check --add-dir <run folder>
+#                     (the run folder is added because the database is in it)
 # The prompt is added as the last argument. "manual" prints the prompt and
 # waits while you run any agent yourself in the work folder.
 set -euo pipefail
@@ -76,8 +81,8 @@ phase() { # phase <label> <agent> <prompt file>
   [ "$prepare_only" = "--prepare-only" ] && return 0
   echo "==> $label: $agent"
   case "$agent" in
-    claude) (cd "$run/work" && ${EVAL_CLAUDE_CMD:-claude -p --permission-mode bypassPermissions} "$(cat "$prompt")") > "$run/$label-transcript.txt" 2>&1 || echo "agent exited with $?" >> "$run/$label-transcript.txt" ;;
-    codex)  (cd "$run/work" && ${EVAL_CODEX_CMD:-codex exec --full-auto} "$(cat "$prompt")") > "$run/$label-transcript.txt" 2>&1 || echo "agent exited with $?" >> "$run/$label-transcript.txt" ;;
+    claude) (cd "$run/work" && ${EVAL_CLAUDE_CMD:-claude -p --permission-mode bypassPermissions} "$(cat "$prompt")" < /dev/null) > "$run/$label-transcript.txt" 2>&1 || echo "agent exited with $?" >> "$run/$label-transcript.txt" ;;
+    codex)  (cd "$run/work" && ${EVAL_CODEX_CMD:-codex exec --sandbox workspace-write --skip-git-repo-check --add-dir "$run"} "$(cat "$prompt")" < /dev/null) > "$run/$label-transcript.txt" 2>&1 || echo "agent exited with $?" >> "$run/$label-transcript.txt" ;;
     manual) echo "Open an agent in: $run/work"
             echo "with: export PATH=\"$run/bin:\$PATH\" SON_DB=\"$SON_DB\" SON_SOURCE=\"$SON_SOURCE\" ${SON_COLLECTION:+SON_COLLECTION=$SON_COLLECTION}"
             echo "Give it the prompt in $run/$label-prompt.md, save its transcript as $run/$label-transcript.txt, then press Enter."

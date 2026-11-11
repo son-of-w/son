@@ -57,9 +57,9 @@ Copy of `score-sheet.md` is put in each run folder as `score.md`. Fill it in fro
 - The run folder must be outside every git repository, and the script stops if it is not. `son init --scope project` installs at the git root, so inside a repository it would write into that repository.
 
 - The agent's own global settings still load (for Claude Code, your `~/.claude/CLAUDE.md`). If that file already holds a `son` block, the agent gets the instructions twice. Record this in `score.md`.
-- The default commands (`claude -p --permission-mode bypassPermissions`, `codex exec --full-auto`) let the agent run commands without asking, inside the run folder. Set `EVAL_CLAUDE_CMD` or `EVAL_CODEX_CMD` to use other flags. The Codex command was written without a Codex install to try it on; check it against your version.
+- The default commands (`claude -p --permission-mode bypassPermissions`, `codex exec --sandbox workspace-write --skip-git-repo-check --add-dir <run folder>`) let the agent run commands without asking; Codex is held to the run folder by its sandbox, Claude Code is not held by anything. Set `EVAL_CLAUDE_CMD` or `EVAL_CODEX_CMD` to use other flags. The defaults were used with Claude Code 2.1.322 and codex-cli 0.167.2.
 - One run of each kind is an observation, not a measurement. Repeat a run before you draw a conclusion from one failure.
 
 ## Results
 
-None yet. See the status in [todo #11](../todos/11.md).
+[results/2026-11-11](results/2026-11-11/README.md): four runs with Claude Code and Codex. 44 of 45 scored checks passed; the one failure and the follow-ups are listed there.

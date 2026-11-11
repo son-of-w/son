@@ -1,0 +1,8 @@
+scenario: coding
+writer: claude
+reader: codex
+date: 2026-11-11T23:29:06Z
+son: son 0.1.12
+commit: 249e096
+claude: 2.1.322 (Claude Code)
+codex: codex-cli 0.167.2
