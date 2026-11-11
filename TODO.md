@@ -6,3 +6,5 @@
   - P2 #13.4 [Rank recalled local and central context with origin labels](todos/13.4.md)
   - P2 #13.5 [Build the central-store reference server and API](todos/13.5.md)
 - P3 #12 [Provide a Homebrew formula or tap for macOS](todos/12.md) — formula script ready; the tap needs a decision
+
+Version 0.2.0 is released after #11 and #12 are done (William, 2026-11-11). Until then, releases stay in 0.1.x.
