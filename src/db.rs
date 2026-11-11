@@ -123,7 +123,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     }
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open database {}", path.display()))?;
-    conn.busy_timeout(BUSY_WAIT)?;
+    conn.busy_timeout(busy_wait())?;
     // Switching a new database to WAL needs the file to itself for a moment.
     // When many sessions open a brand-new database at once, SQLite refuses
     // the others at once, without waiting, so wait and try again here. A
@@ -135,6 +135,7 @@ pub fn open(path: &Path) -> Result<Connection> {
         }
         Ok(())
     })
+    .map_err(busy_error)
     .context("cannot switch the database to WAL mode")?;
     // In WAL mode this keeps the database safe from corruption and skips a
     // disk flush on every commit, which matters now that every command
@@ -145,24 +146,52 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// How long to wait for another session to finish with the database.
-const BUSY_WAIT: Duration = Duration::from_secs(10);
+/// How long to wait for another session to finish with the database: ten
+/// seconds, or the number of milliseconds in `SON_BUSY_MS`. The wait has an
+/// end so that a session that holds the lock for good makes the others fail
+/// with a clear message and not hang.
+pub fn busy_wait() -> Duration {
+    static WAIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WAIT.get_or_init(|| {
+        std::env::var("SON_BUSY_MS")
+            .ok()
+            .and_then(|ms| ms.trim().parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(10))
+    })
+}
+
+/// True when SQLite refused because another connection holds a lock.
+pub fn is_busy(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(e, _)
+            if matches!(e.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Say what a lock error means and what to do. Other errors pass unchanged.
+pub fn busy_error(err: rusqlite::Error) -> anyhow::Error {
+    if is_busy(&err) {
+        anyhow::Error::new(err).context(format!(
+            "the database is in use by another session; gave up after {} ms. Try again",
+            busy_wait().as_millis()
+        ))
+    } else {
+        err.into()
+    }
+}
 
 /// Run `f`, and run it again for as long as SQLite answers "busy" or
-/// "locked", up to [`BUSY_WAIT`]. SQLite's own busy timeout covers most
+/// "locked", up to [`busy_wait`]. SQLite's own busy timeout covers most
 /// waits, but not all: some locks are refused at once (changing the journal
 /// mode, WAL recovery, a read that must become a write).
 pub fn retry_busy<T>(mut f: impl FnMut() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
-    let deadline = Instant::now() + BUSY_WAIT;
+    let deadline = Instant::now() + busy_wait();
     let mut pause = Duration::from_millis(5);
     loop {
         match f() {
-            Err(rusqlite::Error::SqliteFailure(err, _))
-                if matches!(
-                    err.code,
-                    ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
-                ) && Instant::now() < deadline =>
-            {
+            Err(err) if is_busy(&err) && Instant::now() < deadline => {
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(Duration::from_millis(100));
             }
@@ -172,9 +201,7 @@ pub fn retry_busy<T>(mut f: impl FnMut() -> rusqlite::Result<T>) -> rusqlite::Re
 }
 
 fn user_version(conn: &Connection) -> Result<i64> {
-    Ok(retry_busy(|| {
-        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
-    })?)
+    retry_busy(|| conn.query_row("PRAGMA user_version", [], |r| r.get(0))).map_err(busy_error)
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -189,7 +216,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     // Take the write lock, then look again: another session may have
     // created the schema while this one waited.
-    retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE"))?;
+    retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE")).map_err(busy_error)?;
     let result = (|| -> Result<()> {
         let version = user_version(conn)?;
         if version < 1 {
@@ -260,6 +287,38 @@ mod tests {
             .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(events, 0);
+    }
+
+    #[test]
+    fn a_migration_that_fails_leaves_the_database_as_it_was() {
+        let path = temp_db("failed-upgrade");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch(SCHEMA_V2).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            // A table in the way makes the next step of the upgrade fail.
+            conn.execute_batch(
+                "CREATE TABLE events (x); \
+                 INSERT INTO nodes (id, type, title, created_at, updated_at) \
+                 VALUES ('01X', 'note', 'kept', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        assert!(open(&path).is_err());
+        {
+            // Nothing of the failed upgrade stays: same version, same rows.
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(user_version(&conn).unwrap(), 2);
+            let kept: i64 = conn
+                .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(kept, 1);
+            conn.execute_batch("DROP TABLE events").unwrap();
+        }
+        // With the cause removed, the same file upgrades.
+        let conn = open(&path).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]

@@ -853,6 +853,80 @@ fn parallel_sessions_do_not_collide() {
 }
 
 #[test]
+fn parallel_writes_to_an_existing_database_keep_every_record() {
+    let sb = Sandbox::new("parallel-existing");
+    sb.ok("alpha", &["remember", "note", "Already here"]);
+    let children: Vec<_> = (0..16)
+        .map(|i| {
+            // Half the sessions write to a project that does not exist yet.
+            let dir = if i % 2 == 0 { "alpha" } else { "beta" };
+            sb.command(dir, &["remember", "fact", &format!("Parallel fact {i}")])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let facts = sb
+        .ok(
+            "alpha",
+            &["--json", "list", "--type", "fact", "--limit", "100"],
+        )
+        .json();
+    assert_eq!(facts["total"], 16, "{facts}");
+    assert_eq!(
+        sb.ok("alpha", &["--json", "projects"])
+            .json()
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn a_held_lock_fails_after_a_bounded_wait_and_changes_nothing() {
+    let sb = Sandbox::new("held-lock");
+    sb.ok("alpha", &["remember", "note", "Before the lock"]);
+    let holder = rusqlite::Connection::open(sb.root.join("son.db")).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let started = std::time::Instant::now();
+    let out = sb
+        .command("alpha", &["remember", "note", "During the lock"])
+        .env("SON_BUSY_MS", "300")
+        .output()
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("in use by another session"), "{stderr}");
+    assert!(waited.as_millis() >= 300, "gave up too early: {waited:?}");
+    assert!(waited.as_secs() < 5, "waited too long: {waited:?}");
+
+    // Reading does not need the write lock.
+    sb.command("alpha", &["show", "nothing"])
+        .env("SON_BUSY_MS", "300")
+        .env("SON_NO_LOG", "1")
+        .output()
+        .unwrap();
+
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+    let notes = sb.ok("alpha", &["--json", "list", "--type", "note"]).json();
+    assert_eq!(notes["total"], 1, "{notes}");
+    sb.ok("alpha", &["remember", "note", "After the lock"]);
+}
+
+#[test]
 fn recall_matches_prefixes_and_typos_and_says_so() {
     let sb = Sandbox::new("loose");
     sb.ok(

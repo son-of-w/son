@@ -123,7 +123,7 @@ son stats [--days 30 | --all]
 
 Types are `project`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
 
-Set `SON_DB` to use a different database file.
+Set `SON_DB` to use a different database file. Many sessions can use the database at the same time: a session that finds it locked waits for up to 10 seconds, then fails with a message and changes nothing. Set `SON_BUSY_MS` to change that wait (in milliseconds).
 
 Do not store secrets. The database is plain text.
 

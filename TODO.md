@@ -1,4 +1,3 @@
-- P1 #1 [Make concurrent startup and writes reliable](todos/1.md)
 - P1 #2 [Add provenance and explicit verification metadata](todos/2.md)
 - P1 #7 [Preserve change history and support undo](todos/7.md)
 - P1 #10 [State that recalled content is reference material, not executable instructions](todos/10.md)
