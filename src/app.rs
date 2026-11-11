@@ -1,16 +1,20 @@
 //! Runs one command.
 
+use crate::activity::{self, Draft, EventFilter, NodeFilter};
 use crate::analyze::Analyzer;
 use crate::cli::{Cli, Command, NodeType, Relation, SynonymCommand, TodoCommand};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
 use crate::store::{self, Meta, NewNode, Node, TODO_STATUSES};
-use crate::{claude_md, db, project, transfer};
+use crate::{claude_md, db, project, report, transfer};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use rusqlite::Connection;
 use serde_json::json;
+use std::cell::RefCell;
 use std::io::Read;
+use std::path::Path;
+use std::time::Instant;
 
 const CONTEXT_SECTION_LIMIT: usize = 10;
 const CONTEXT_NOTES_LIMIT: usize = 5;
@@ -20,6 +24,43 @@ struct App {
     an: Analyzer,
     meta: Meta,
     json: bool,
+    /// What the running command reports about itself for the activity log.
+    draft: RefCell<Draft>,
+}
+
+/// The name a command is logged under, and whether it changes the store.
+/// `None` for commands that are not logged: looking at activity is not
+/// activity.
+fn log_name(command: &Command) -> Option<(&'static str, bool)> {
+    Some(match command {
+        Command::Init { .. }
+        | Command::List { .. }
+        | Command::Log { .. }
+        | Command::Stats { .. } => return None,
+        Command::Remember { .. } => ("remember", true),
+        Command::Recall { .. } => ("recall", false),
+        Command::Show { .. } => ("show", false),
+        Command::Edit { .. } => ("edit", true),
+        Command::Drop { .. } => ("drop", true),
+        Command::Restore { .. } => ("restore", true),
+        Command::Todo { command } => match command {
+            TodoCommand::Add { .. } => ("todo add", true),
+            TodoCommand::List { .. } => ("todo list", false),
+            TodoCommand::Done { .. } => ("todo done", true),
+        },
+        Command::Link { .. } => ("link", true),
+        Command::Unlink { .. } => ("unlink", true),
+        Command::Projects => ("projects", false),
+        Command::Synonym { command } => match command {
+            SynonymCommand::Add { .. } => ("synonym add", true),
+            SynonymCommand::List => ("synonym list", false),
+            SynonymCommand::Remove { .. } => ("synonym remove", true),
+        },
+        Command::Export { .. } => ("export", false),
+        Command::Import { .. } => ("import", true),
+        Command::Context { .. } => ("context", false),
+        Command::Reindex => ("reindex", true),
+    })
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -30,16 +71,38 @@ pub fn run(cli: Cli) -> Result<()> {
         print!("{}", claude_md::block());
         return Ok(());
     }
+    let started = Instant::now();
     let path = db::path()?;
     let app = App {
         conn: db::open(&path)?,
         an: Analyzer::new(),
         meta: Meta::from_env(),
         json: cli.json,
+        draft: RefCell::new(Draft::default()),
     };
 
-    match cli.command {
-        Command::Init { no_claude_md, .. } => app.init(&path, no_claude_md),
+    let logged = log_name(&cli.command).filter(|_| activity::enabled());
+    let result = dispatch(&app, &path, cli.command);
+    if let Some((command, write)) = logged {
+        // The log must never make a command fail or slow: ignore its errors.
+        let _ = activity::record(
+            &app.conn,
+            &activity::Event {
+                command,
+                write,
+                source: app.meta.source.as_deref(),
+                ms: started.elapsed().as_millis() as i64,
+                error: result.as_ref().err().map(|err| format!("{err:#}")),
+                draft: &app.draft.borrow(),
+            },
+        );
+    }
+    result
+}
+
+fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
+    match command {
+        Command::Init { no_claude_md, .. } => app.init(path, no_claude_md),
         Command::Remember {
             kind,
             title,
@@ -99,6 +162,43 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Export { project } => app.export(project.as_deref()),
         Command::Import { file } => app.import(&file),
         Command::Context { project } => app.context(project.as_deref()),
+        Command::List {
+            project,
+            kind,
+            dropped,
+            limit,
+            page,
+        } => app.list(
+            project.as_deref(),
+            kind,
+            dropped,
+            limit as usize,
+            page as usize,
+        ),
+        Command::Log {
+            project,
+            command,
+            errors,
+            limit,
+            page,
+        } => app.log(
+            project.as_deref(),
+            command.as_deref(),
+            errors,
+            limit as usize,
+            page as usize,
+        ),
+        Command::Stats { days, all } => {
+            let stats = activity::stats(&app.conn, (!all).then_some(days))?;
+            let target = claude_md::target();
+            let claude_md = target.as_deref().map(|target| {
+                let installed = std::fs::read_to_string(target)
+                    .is_ok_and(|text| text.contains(claude_md::START));
+                (target, installed)
+            });
+            report::stats(&stats, path, claude_md, app.json);
+            Ok(())
+        }
         Command::Reindex => {
             let count = store::write(&app.conn, || store::reindex_all(&app.conn, &app.an))?;
             if app.json {
@@ -155,6 +255,99 @@ fn parse_link(text: &str) -> Result<(&str, Relation)> {
 }
 
 impl App {
+    /// Add to what the activity log will say about this command.
+    fn note(&self, fill: impl FnOnce(&mut Draft)) {
+        fill(&mut self.draft.borrow_mut());
+    }
+
+    /// Log the node a command acted on.
+    fn note_node(&self, node: &Node) {
+        self.note(|draft| {
+            draft.node_id = Some(node.id.clone());
+            draft.detail = Some(format!("[{}] {}", node.kind, node.title));
+            draft.project = Some(node.project_name().to_string());
+        });
+    }
+
+    fn list(
+        &self,
+        project: Option<&str>,
+        kind: Option<NodeType>,
+        dropped: bool,
+        limit: usize,
+        page: usize,
+    ) -> Result<()> {
+        let (scope, project_id) = match project {
+            Some(name) => {
+                let id = store::find_project(&self.conn, name.trim())?
+                    .ok_or_else(|| anyhow!("no project named '{name}' (see `son projects`)"))?;
+                (name.trim().to_string(), Some(id))
+            }
+            None => ("all projects".to_string(), None),
+        };
+        let nodes = activity::nodes_page(
+            &self.conn,
+            &NodeFilter {
+                project_id: project_id.as_deref(),
+                kind: kind.map(NodeType::as_str),
+                include_dropped: dropped,
+            },
+            limit,
+            page,
+        )?;
+        // The command that gives the next page: the same filters again.
+        let mut again = "son list".to_string();
+        if let Some(name) = project {
+            again.push_str(&format!(" --project {}", name.trim()));
+        }
+        if let Some(kind) = kind {
+            again.push_str(&format!(" --type {}", kind.as_str()));
+        }
+        if dropped {
+            again.push_str(" --dropped");
+        }
+        if limit != 20 {
+            again.push_str(&format!(" --limit {limit}"));
+        }
+        report::nodes(&nodes, &scope, &again, self.json);
+        Ok(())
+    }
+
+    fn log(
+        &self,
+        project: Option<&str>,
+        command: Option<&str>,
+        errors: bool,
+        limit: usize,
+        page: usize,
+    ) -> Result<()> {
+        let events = activity::events_page(
+            &self.conn,
+            &EventFilter {
+                project: project.map(str::trim),
+                command: command.map(str::trim),
+                errors_only: errors,
+            },
+            limit,
+            page,
+        )?;
+        let mut again = "son log".to_string();
+        if let Some(name) = project {
+            again.push_str(&format!(" --project {}", name.trim()));
+        }
+        if let Some(command) = command {
+            again.push_str(&format!(" --command \"{}\"", command.trim()));
+        }
+        if errors {
+            again.push_str(" --errors");
+        }
+        if limit != 20 {
+            again.push_str(&format!(" --limit {limit}"));
+        }
+        report::events(&events, &again, self.json);
+        Ok(())
+    }
+
     fn init(&self, path: &std::path::Path, no_claude_md: bool) -> Result<()> {
         let mut report = json!({ "database": path.display().to_string() });
         if !self.json {
@@ -241,7 +434,9 @@ impl App {
             }
             Ok(id)
         })?;
-        render::saved("saved", &store::get_node(&self.conn, &id)?, self.json);
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        render::saved("saved", &node, self.json);
         Ok(())
     }
 
@@ -278,6 +473,10 @@ impl App {
         hops: u8,
     ) -> Result<()> {
         let name = project_name(project)?;
+        self.note(|draft| {
+            draft.detail = Some(terms.to_string());
+            draft.project = Some(name.clone());
+        });
         let found = store::find_project(&self.conn, &name)?;
         if project.is_some() && found.is_none() {
             bail!("no project named '{name}' (see `son projects`)");
@@ -298,6 +497,10 @@ impl App {
                 hops,
             },
         )?;
+        self.note(|draft| {
+            draft.results = Some(result.hits.len() as i64);
+            draft.close = Some(result.hits.iter().filter(|hit| hit.close).count() as i64);
+        });
         render::recall(terms, &name, &result, self.json);
         Ok(())
     }
@@ -305,6 +508,7 @@ impl App {
     fn show(&self, id: &str) -> Result<()> {
         let id = store::resolve_id(&self.conn, id)?;
         let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
         let edges = store::edges_of(&self.conn, &id)?;
         let newer = store::superseded_by(&self.conn, &id)?;
         render::show(&node, &edges, newer.as_ref(), self.json);
@@ -388,13 +592,16 @@ impl App {
             }
             store::update_node(&self.conn, &self.an, &node)
         })?;
-        render::saved("updated", &store::get_node(&self.conn, &id)?, self.json);
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        render::saved("updated", &node, self.json);
         Ok(())
     }
 
     fn drop_node(&self, id: &str, purge: bool) -> Result<()> {
         let id = store::resolve_id(&self.conn, id)?;
         let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
         store::write(&self.conn, || {
             if purge {
                 return store::purge(&self.conn, &id);
@@ -434,6 +641,7 @@ impl App {
     fn restore(&self, id: &str) -> Result<()> {
         let id = store::resolve_id(&self.conn, id)?;
         let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
         if node.deleted_at.is_none() {
             bail!("`{}` is not dropped", node.short());
         }
@@ -466,6 +674,10 @@ impl App {
         }
         // Oldest first: a todo list reads top down.
         todos.sort_by(|a, b| a.id.cmp(&b.id));
+        self.note(|draft| {
+            draft.project = project_id.is_some().then(|| scope.clone());
+            draft.results = Some(todos.len() as i64);
+        });
         render::todos(&todos, &scope, self.json);
         Ok(())
     }
@@ -473,6 +685,7 @@ impl App {
     fn todo_done(&self, id: &str) -> Result<()> {
         let id = store::resolve_id(&self.conn, id)?;
         let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
         if node.kind != "todo" {
             bail!("`{}` is a {}, not a todo", node.short(), node.kind);
         }
@@ -495,6 +708,11 @@ impl App {
             store::get_node(&self.conn, &from)?,
             store::get_node(&self.conn, &to)?,
         );
+        self.note(|draft| {
+            draft.node_id = Some(from.id.clone());
+            draft.detail = Some(format!("{} {} {}", from.title, relation.as_str(), to.title));
+            draft.project = Some(from.project_name().to_string());
+        });
         let result = match (add, changed) {
             (true, true) => "linked",
             (true, false) => "already linked",
@@ -524,6 +742,7 @@ impl App {
     fn synonym(&self, command: SynonymCommand) -> Result<()> {
         match command {
             SynonymCommand::Add { term, canonical } => {
+                self.note(|draft| draft.detail = Some(format!("{term} -> {canonical}")));
                 store::write(&self.conn, || {
                     store::add_synonym(&self.conn, &term, &canonical)
                 })?;
@@ -536,6 +755,7 @@ impl App {
                 }
             }
             SynonymCommand::Remove { term } => {
+                self.note(|draft| draft.detail = Some(term.clone()));
                 let removed =
                     store::write(&self.conn, || store::remove_synonym(&self.conn, &term))?;
                 if self.json {
@@ -574,7 +794,9 @@ impl App {
             ),
             None => None,
         };
+        self.note(|draft| draft.project = project.map(|name| name.trim().to_string()));
         let dump = transfer::export(&self.conn, project_id.as_deref())?;
+        self.note(|draft| draft.results = Some(dump.nodes.len() as i64));
         if self.json {
             println!("{}", serde_json::to_string_pretty(&dump)?);
         } else {
@@ -593,7 +815,9 @@ impl App {
         };
         let dump: transfer::Dump = serde_json::from_str(&text)
             .context("this is not a son JSON export (make one with `son export --json`)")?;
+        self.note(|draft| draft.detail = Some(file.to_string()));
         let stats = transfer::import(&self.conn, &self.an, &dump)?;
+        self.note(|draft| draft.results = Some((stats.added + stats.updated) as i64));
         if self.json {
             render::print_json(&serde_json::to_value(&stats)?);
         } else {
@@ -607,6 +831,7 @@ impl App {
 
     fn context(&self, project: Option<&str>) -> Result<()> {
         let name = project_name(project)?;
+        self.note(|draft| draft.project = Some(name.clone()));
         let Some(project_id) = store::find_project(&self.conn, &name)? else {
             if self.json {
                 render::print_json(&json!({ "project": null, "name": name }));

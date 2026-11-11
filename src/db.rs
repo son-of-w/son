@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// are not used yet; they exist so the version 2 central store needs no
@@ -83,6 +83,28 @@ const SCHEMA_V2: &str = "
 CREATE VIRTUAL TABLE nodes_vocab USING fts5vocab('nodes_fts', 'row');
 ";
 
+/// Version 3 adds the activity log: one row for every command that is run.
+/// It is local bookkeeping for `son log` and `son stats`; it is not exported
+/// and will not be synced, so a plain counter is fine as its key.
+const SCHEMA_V3: &str = "
+CREATE TABLE events (
+    id       INTEGER PRIMARY KEY,
+    at       TEXT NOT NULL,
+    command  TEXT NOT NULL,
+    kind     TEXT NOT NULL,
+    ok       INTEGER NOT NULL,
+    project  TEXT,
+    source   TEXT,
+    node_id  TEXT,
+    detail   TEXT,
+    results  INTEGER,
+    close    INTEGER,
+    ms       INTEGER NOT NULL DEFAULT 0,
+    error    TEXT
+);
+CREATE INDEX events_at ON events(at);
+";
+
 /// `SON_DB` if set, else `~/.son-of-w/son.db`.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
@@ -103,6 +125,10 @@ pub fn open(path: &Path) -> Result<Connection> {
         .with_context(|| format!("cannot open database {}", path.display()))?;
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+    // In WAL mode this keeps the database safe from corruption and skips a
+    // disk flush on every commit, which matters now that every command
+    // writes a row to the activity log.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     migrate(&conn)?;
     Ok(conn)
@@ -132,6 +158,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         if version < 2 {
             conn.execute_batch(SCHEMA_V2)?;
+        }
+        if version < 3 {
+            conn.execute_batch(SCHEMA_V3)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
@@ -188,6 +217,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(terms, 1);
+        let events: i64 = conn
+            .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(events, 0);
     }
 
     #[test]

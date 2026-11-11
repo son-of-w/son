@@ -716,3 +716,204 @@ fn recall_matches_prefixes_and_typos_and_says_so() {
     let json = sb.ok("alpha", &["--json", "recall", "terraform"]).json();
     assert_eq!(json["hits"][0]["match"], "exact");
 }
+
+#[test]
+fn list_pages_through_nodes_newest_change_first() {
+    let sb = Sandbox::new("list");
+    assert!(sb
+        .ok("alpha", &["list"])
+        .stdout
+        .contains("Nothing is stored"));
+
+    let mut ids = Vec::new();
+    for i in 1..=5 {
+        ids.push(
+            sb.ok("alpha", &["remember", "note", &format!("Note number {i}")])
+                .id(),
+        );
+    }
+    sb.ok("beta", &["todo", "add", "A todo in beta"]);
+    // Changing the oldest node brings it to the top.
+    sb.ok("alpha", &["edit", &ids[0], "--body", "changed"]);
+    sb.ok("alpha", &["drop", &ids[1]]);
+
+    // 4 live notes and 1 todo, 3 to a page. Project nodes are not listed.
+    let first = sb.ok("alpha", &["list", "--limit", "3"]).stdout;
+    assert!(first.contains("page 1 of 2 (5 nodes)"), "{first}");
+    assert!(first.contains("Next page: `son list --limit 3 --page 2`"));
+    let top = first.lines().nth(1).unwrap();
+    assert!(
+        top.contains("updated") && top.contains("Note number 1"),
+        "{top}"
+    );
+    assert!(!first.contains("Note number 2"));
+
+    let second = sb
+        .ok("alpha", &["list", "--limit", "3", "--page", "2"])
+        .stdout;
+    assert!(second.contains("page 2 of 2") && !second.contains("Next page"));
+    assert_eq!(
+        first.matches("\n- ").count() + second.matches("\n- ").count(),
+        5
+    );
+    assert!(sb
+        .ok("alpha", &["list", "--page", "9"])
+        .stdout
+        .contains("past the end"));
+
+    // Filters.
+    let todos = sb.ok("alpha", &["list", "--type", "todo"]).stdout;
+    assert!(todos.contains("A todo in beta") && !todos.contains("Note number"));
+    let alpha = sb.ok("beta", &["list", "--project", "alpha"]).stdout;
+    assert!(alpha.contains("Note number 3") && !alpha.contains("A todo in beta"));
+    let dropped = sb.ok("alpha", &["list", "--dropped"]).stdout;
+    assert!(dropped.contains("dropped") && dropped.contains("Note number 2"));
+    assert!(!sb.son("alpha", &["list", "--project", "nope"]).ok);
+    assert!(!sb.son("alpha", &["list", "--page", "0"]).ok);
+
+    let json = sb.ok("alpha", &["--json", "list", "--limit", "2"]).json();
+    assert_eq!(json["total"], 5);
+    assert_eq!(json["pages"], 3);
+    assert_eq!(json["items"].as_array().unwrap().len(), 2);
+    assert_eq!(json["items"][0]["action"], "updated");
+}
+
+#[test]
+fn log_records_every_command_and_pages() {
+    let sb = Sandbox::new("log");
+    assert!(sb
+        .ok("alpha", &["log"])
+        .stdout
+        .contains("No commands have been logged"));
+
+    let id = sb
+        .ok("alpha", &["remember", "pattern", "Terraform AWS layout"])
+        .id();
+    sb.ok("alpha", &["recall", "terraform"]);
+    sb.ok("alpha", &["recall", "terrafrom"]);
+    sb.ok("alpha", &["recall", "nothinglikethis"]);
+    sb.ok("alpha", &["show", &id]);
+    assert!(!sb.son("alpha", &["show", "zzzzzzzz"]).ok);
+
+    let log = sb.ok("alpha", &["log"]).stdout;
+    assert!(log.contains("page 1 of 1 (6 commands)"), "{log}");
+    assert!(log.contains("remember [pattern] Terraform AWS layout"));
+    assert!(log.contains("recall \"terraform\"") && log.contains("→ 1 result ·"));
+    assert!(log.contains("recall \"terrafrom\"") && log.contains("(1 close)"));
+    assert!(log.contains("recall \"nothinglikethis\"") && log.contains("→ 0 results"));
+    assert!(log.contains("show FAILED: no node has an id ending in 'zzzzzzzz'"));
+    assert!(log.contains("· alpha ·"));
+    // Newest first.
+    assert!(position(&log, "show FAILED") < position(&log, "remember [pattern]"));
+
+    // Looking at the log, the list or the stats is not logged.
+    sb.ok("alpha", &["list"]);
+    sb.ok("alpha", &["stats"]);
+    assert!(sb.ok("alpha", &["log"]).stdout.contains("(6 commands)"));
+
+    let errors = sb.ok("alpha", &["log", "--errors"]).stdout;
+    assert!(errors.contains("(1 command)") && errors.contains("show FAILED"));
+    let recalls = sb
+        .ok("alpha", &["log", "--command", "recall", "--limit", "2"])
+        .stdout;
+    assert!(recalls.contains("page 1 of 2 (3 commands)"));
+    assert!(recalls.contains("Next page: `son log --command \"recall\" --limit 2 --page 2`"));
+    assert!(sb
+        .ok("alpha", &["log", "--project", "beta"])
+        .stdout
+        .contains("No commands"));
+
+    let json = sb
+        .ok("alpha", &["--json", "log", "--command", "recall"])
+        .json();
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["items"][0]["detail"], "nothinglikethis");
+    assert_eq!(json["items"][0]["results"], 0);
+
+    // SON_NO_LOG turns the log off; SON_SOURCE names the session.
+    let quiet = sb
+        .command("alpha", &["recall", "terraform"])
+        .env("SON_NO_LOG", "1")
+        .output()
+        .unwrap();
+    assert!(quiet.status.success());
+    assert!(sb.ok("alpha", &["log"]).stdout.contains("(6 commands)"));
+    let named = sb
+        .command("alpha", &["recall", "terraform"])
+        .env("SON_SOURCE", "sess-1")
+        .output()
+        .unwrap();
+    assert!(named.status.success());
+    assert!(sb
+        .ok("alpha", &["log", "--limit", "1"])
+        .stdout
+        .contains("session sess-1"));
+}
+
+#[test]
+fn stats_show_the_store_and_how_son_is_used() {
+    let sb = Sandbox::new("stats");
+    let empty = sb.ok("alpha", &["stats"]).stdout;
+    assert!(empty.contains("0 nodes in 0 projects"));
+    assert!(empty.contains("No commands were logged"));
+    assert!(empty.contains("CLAUDE.md block: NOT installed"));
+
+    sb.ok("alpha", &["init"]);
+    let a = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "pattern",
+                "Terraform AWS layout",
+                "--tag",
+                "terraform,aws",
+            ],
+        )
+        .id();
+    let b = sb
+        .ok("alpha", &["remember", "decision", "Pin providers"])
+        .id();
+    sb.ok("alpha", &["link", &b, "relates_to", &a]);
+    let todo = sb.ok("beta", &["todo", "add", "First todo"]).id();
+    sb.ok("beta", &["todo", "add", "Second todo"]);
+    sb.ok("beta", &["todo", "done", &todo]);
+    sb.ok("alpha", &["recall", "terraform"]);
+    sb.ok("alpha", &["recall", "terrafrom"]);
+    sb.ok("alpha", &["recall", "kubernetes"]);
+    sb.ok("alpha", &["recall", "Kubernetes"]);
+    assert!(!sb.son("alpha", &["show", "zzzzzzzz"]).ok);
+
+    let out = sb.ok("alpha", &["stats"]).stdout;
+    assert!(out.contains("# son stats (last 30 days)"));
+    assert!(out.contains("4 nodes in 2 projects"), "{out}");
+    assert!(out.contains("todo 2") && out.contains("pattern 1") && out.contains("decision 1"));
+    assert!(out.contains("todos: 1 open, 1 done, 0 dropped"));
+    assert!(out.contains("1 links · 2 tags"));
+    assert!(out.contains("CLAUDE.md block: installed"));
+    assert!(
+        out.contains("11 commands on 1 day: 4 reads, 6 writes, 1 failed"),
+        "{out}"
+    );
+    assert!(out.contains("1.50 writes for each recall"));
+    assert!(out.contains("4 recalls: 2 found something (50%), 2 found nothing"));
+    assert!(out.contains("1 needed a close match"));
+    assert!(out.contains("found nothing for: \"kubernetes\" (2)"));
+    assert!(out.contains("recall 4") && out.contains("remember 2"));
+    assert!(out.contains("## By day") && out.contains("(4 recalls, 6 writes)"));
+
+    let json = sb.ok("alpha", &["--json", "stats", "--all"]).json();
+    assert_eq!(json["days"], Value::Null);
+    assert_eq!(json["store"]["nodes"], 4);
+    assert_eq!(json["activity"]["commands"], 11);
+    assert_eq!(json["recall"]["hit_rate"], 0.5);
+    assert_eq!(json["recall"]["missed"][0]["name"], "kubernetes");
+    assert_eq!(json["claude_md"]["installed"], true);
+    assert!(json["database"]["bytes"].as_u64().unwrap() > 0);
+
+    assert!(sb
+        .ok("alpha", &["stats", "--days", "7"])
+        .stdout
+        .contains("(last 7 days)"));
+    assert!(!sb.son("alpha", &["stats", "--days", "7", "--all"]).ok);
+}

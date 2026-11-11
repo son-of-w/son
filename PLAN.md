@@ -154,6 +154,9 @@ son synonym remove <term>
 son export [--project <name>]             # markdown dump; with --json, the backup format
 son import <file|->                       # load a JSON export
 son reindex                               # rebuild the search index
+son list [--project <name>] [--type <type>] [--dropped] [--limit 20] [--page 1]
+son log [--project <name>] [--command <name>] [--errors] [--limit 20] [--page 1]
+son stats [--days 30 | --all]
 son context [--project <name>]            # one-shot bootstrap block for session start
 ```
 
@@ -164,6 +167,18 @@ Every node type has full create, read, update, and delete: `remember` / `todo ad
 Write commands attach the new node to the current project unless `--project` names another. `todo list` shows the current project's open todos; `--all` shows every project's, and `--done` includes done and dropped ones.
 
 `export` prints markdown for reading. `export --json` is the backup format: `import` reads it back, replaces a node only when the incoming copy is newer, and merges a project into a local project of the same name.
+
+## Activity and Stats
+
+Every command is written to a local activity log (the `events` table, schema version 3): the time, the command, whether it reads or writes, the project, the session (`SON_SOURCE`), the node it acted on, the query or title, the number of results, how many of those were close matches, how long it took, and the error if it failed. `son list`, `son log`, `son stats` and `son init` are not logged. The log is never exported and will not be synced. `SON_NO_LOG=1` turns it off.
+
+* `son list` — nodes, most recently changed first, with what last happened to each (created, updated, dropped). Pageable, with filters for project and type.
+* `son log` — the activity log, newest first. Pageable, with filters for project, command, and failures.
+* `son stats` — what is stored now (nodes by type, todos, links, tags, database size, whether the CLAUDE.md block is installed) and how `son` was used over the last 30 days or all time: commands by day, command and project, the share of recalls that found something, the queries that found nothing, how often a close match was needed, writes for each recall, and median and 95th-percentile recall time. It ends with plain remarks when a number looks wrong, for example "sessions read but never write back".
+
+These are the two numbers from Testing the Hypothesis: how often `recall` is called, and how often a session writes back.
+
+Timestamps are UTC to the millisecond, so that two changes in the same second keep their order.
 
 ## CLAUDE.md Protocol
 

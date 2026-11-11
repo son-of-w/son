@@ -66,7 +66,12 @@ son synonym add <term> <canonical> | list | remove <term>
 son export [--project <name>]              markdown; add --json for the backup format
 son import <file|->                        load a JSON export
 son reindex
+son list [--project <name>] [--type <type>] [--dropped] [--limit 20] [--page 1]
+son log [--project <name>] [--command <name>] [--errors] [--limit 20] [--page 1]
+son stats [--days 30 | --all]
 ```
+
+`son list` shows nodes, most recently changed first. `son log` shows every command that was run: what was recalled, how many results it gave, what was saved, and what failed. `son stats` shows how much is stored and how `son` is being used: commands per day, how often a recall finds something, the queries that found nothing, writes for each recall, and recall speed. The log is local; set `SON_NO_LOG=1` to turn it off, and set `SON_SOURCE` to a session name to have it recorded.
 
 Types are `project`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
 

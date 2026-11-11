@@ -185,6 +185,51 @@ pub enum Command {
     },
     /// Rebuild the search index
     Reindex,
+    /// List nodes, most recently changed first
+    List {
+        /// Only this project (default: every project)
+        #[arg(long)]
+        project: Option<String>,
+        /// Only this node type
+        #[arg(long = "type", value_enum)]
+        kind: Option<NodeType>,
+        /// Include dropped nodes
+        #[arg(long)]
+        dropped: bool,
+        /// Nodes on one page
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: u32,
+        /// Which page to show, from 1
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        page: u32,
+    },
+    /// Show the commands that were run, newest first
+    Log {
+        /// Only commands run for this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Only this command, for example recall or "todo add"
+        #[arg(long)]
+        command: Option<String>,
+        /// Only commands that failed
+        #[arg(long)]
+        errors: bool,
+        /// Commands on one page
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: u32,
+        /// Which page to show, from 1
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        page: u32,
+    },
+    /// Show how much is stored and how son is being used
+    Stats {
+        /// How many days of activity to count
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..))]
+        days: u32,
+        /// Count all activity, not only the last days
+        #[arg(long, conflicts_with = "days")]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]

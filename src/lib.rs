@@ -1,5 +1,6 @@
 //! son: a local second brain for Claude sessions. See PLAN.md.
 
+pub mod activity;
 pub mod analyze;
 pub mod app;
 pub mod claude_md;
@@ -7,6 +8,7 @@ pub mod cli;
 pub mod db;
 pub mod project;
 pub mod render;
+pub mod report;
 pub mod search;
 pub mod store;
 pub mod transfer;

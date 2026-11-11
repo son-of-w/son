@@ -25,5 +25,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 - `src/store.rs` — nodes, tags, edges, synonyms
 - `src/search.rs` — recall: ranking and graph expansion
 - `src/render.rs` — markdown and JSON output
+- `src/activity.rs` — the activity log, paging, and the numbers for `son stats`
+- `src/report.rs` — output for `son list`, `son log`, `son stats`
 - `src/claude_md.rs` — the block for `~/.claude/CLAUDE.md`
 - `src/transfer.rs` — export and import

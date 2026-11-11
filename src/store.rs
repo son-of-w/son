@@ -6,7 +6,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+/// The current time in UTC, to the millisecond, so that two changes in the
+/// same second still sort in the order they happened.
+pub const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 pub const TODO_STATUSES: [&str; 3] = ["open", "done", "dropped"];
 pub const RELATIONS: [&str; 5] = [
     "belongs_to",
