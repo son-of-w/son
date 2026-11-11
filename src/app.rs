@@ -54,7 +54,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         },
         Command::Link { .. } => ("link", true),
         Command::Unlink { .. } => ("unlink", true),
-        Command::Projects => ("projects", false),
+        Command::Collections => ("collections", false),
         Command::Synonym { command } => match command {
             SynonymCommand::Add { .. } => ("synonym add", true),
             SynonymCommand::List => ("synonym list", false),
@@ -157,7 +157,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             kind,
             title,
             body,
-            project,
+            collection: project,
             tag,
             link,
             evidence,
@@ -178,7 +178,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Recall {
             query,
             kind,
-            project,
+            collection: project,
             limit,
             hops,
         } => app.recall(&query.join(" "), kind, project.as_deref(), limit, hops),
@@ -189,7 +189,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             body,
             kind,
             status,
-            project,
+            collection: project,
             tag,
             evidence,
             refs,
@@ -223,7 +223,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             TodoCommand::Add {
                 title,
                 body,
-                project,
+                collection: project,
                 tag,
                 evidence,
                 refs,
@@ -240,24 +240,30 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                     refs: &refs,
                 })
             }
-            TodoCommand::List { project, all, done } => {
-                app.todo_list(project.as_deref(), all, done)
-            }
+            TodoCommand::List {
+                collection: project,
+                all,
+                done,
+            } => app.todo_list(project.as_deref(), all, done),
             TodoCommand::Done { id } => app.todo_done(&id),
         },
         Command::Link { from, relation, to } => app.link(&from, relation, &to, true),
         Command::Unlink { from, relation, to } => app.link(&from, relation, &to, false),
-        Command::Projects => {
+        Command::Collections => {
             let rows = store::list_projects(&app.conn)?;
             render::projects(&rows, &current_project_name()?, app.json);
             Ok(())
         }
         Command::Synonym { command } => app.synonym(command),
-        Command::Export { project } => app.export(project.as_deref()),
+        Command::Export {
+            collection: project,
+        } => app.export(project.as_deref()),
         Command::Import { file } => app.import(&file),
-        Command::Context { project } => app.context(project.as_deref()),
+        Command::Context {
+            collection: project,
+        } => app.context(project.as_deref()),
         Command::List {
-            project,
+            collection: project,
             kind,
             dropped,
             limit,
@@ -270,7 +276,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             page as usize,
         ),
         Command::Log {
-            project,
+            collection: project,
             command,
             errors,
             limit,
@@ -319,13 +325,20 @@ fn current_project_name() -> Result<String> {
     Ok(project::detect(&cwd))
 }
 
-/// The project named by `--project`, else the detected one.
+/// The collection named by `--collection`, else the current one.
 fn project_name(flag: Option<&str>) -> Result<String> {
     match flag.map(str::trim) {
-        Some("") => bail!("--project needs a name"),
+        Some("") => bail!("--collection needs a name"),
         Some(name) => Ok(name.to_string()),
         None => current_project_name(),
     }
+}
+
+fn no_collection(name: &str) -> anyhow::Error {
+    anyhow!(
+        "no collection named '{}' (see `son collections`)",
+        name.trim()
+    )
 }
 
 /// `<id>:<relation>` from `--link`.
@@ -397,10 +410,10 @@ impl App {
         let (scope, project_id) = match project {
             Some(name) => {
                 let id = store::find_project(&self.conn, name.trim())?
-                    .ok_or_else(|| anyhow!("no project named '{name}' (see `son projects`)"))?;
+                    .ok_or_else(|| no_collection(name))?;
                 (name.trim().to_string(), Some(id))
             }
-            None => ("all projects".to_string(), None),
+            None => ("all collections".to_string(), None),
         };
         let nodes = activity::nodes_page(
             &self.conn,
@@ -415,7 +428,7 @@ impl App {
         // The command that gives the next page: the same filters again.
         let mut again = "son list".to_string();
         if let Some(name) = project {
-            again.push_str(&format!(" --project {}", name.trim()));
+            again.push_str(&format!(" --collection {}", name.trim()));
         }
         if let Some(kind) = kind {
             again.push_str(&format!(" --type {}", kind.as_str()));
@@ -450,7 +463,7 @@ impl App {
         )?;
         let mut again = "son log".to_string();
         if let Some(name) = project {
-            again.push_str(&format!(" --project {}", name.trim()));
+            again.push_str(&format!(" --collection {}", name.trim()));
         }
         if let Some(command) = command {
             again.push_str(&format!(" --command \"{}\"", command.trim()));
@@ -481,13 +494,13 @@ impl App {
         let evidence = new.evidence.and_then(Evidence::stored);
         let refs = parse_refs(new.refs)?;
         let id = store::write(&self.conn, || {
-            let id = if kind == NodeType::Project {
+            let id = if kind == NodeType::Collection {
                 if project.is_some() {
-                    bail!("a project cannot be inside another project");
+                    bail!("a collection cannot be inside another collection");
                 }
                 if let Some(existing) = store::find_project(&self.conn, title)? {
                     bail!(
-                        "project '{title}' already exists (`{}`); change it with `son edit`",
+                        "collection '{title}' already exists (`{}`); change it with `son edit`",
                         store::short_id(&existing)
                     );
                 }
@@ -545,8 +558,8 @@ impl App {
         }
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
-        if node.kind == "project" {
-            bail!("a project is a container; verify the nodes in it");
+        if node.kind == "collection" {
+            bail!("a collection is a container; verify the nodes in it");
         }
         store::write(&self.conn, || {
             if clear {
@@ -584,7 +597,7 @@ impl App {
         });
         let found = store::find_project(&self.conn, &name)?;
         if project.is_some() && found.is_none() {
-            bail!("no project named '{name}' (see `son projects`)");
+            return Err(no_collection(&name));
         }
         let result = search::recall(
             &self.conn,
@@ -643,7 +656,7 @@ impl App {
             && unref.is_empty()
         {
             bail!(
-                "nothing to change; give --title, --body, --type, --status, --project, --tag, \
+                "nothing to change; give --title, --body, --type, --status, --collection, --tag, \
                  --evidence, --ref or --unref"
             );
         }
@@ -651,7 +664,7 @@ impl App {
         let id = store::resolve_id(&self.conn, id)?;
         store::write(&self.conn, || {
             let mut node = store::get_node(&self.conn, &id)?;
-            let is_project = node.kind == "project";
+            let is_project = node.kind == "collection";
 
             if let Some(title) = title {
                 let title = title.trim().to_string();
@@ -661,7 +674,7 @@ impl App {
                 if is_project {
                     if let Some(other) = store::find_project(&self.conn, &title)? {
                         if other != node.id {
-                            bail!("another project is already called '{title}'");
+                            bail!("another collection is already called '{title}'");
                         }
                     }
                 }
@@ -671,8 +684,10 @@ impl App {
                 node.body = body;
             }
             if let Some(kind) = kind {
-                if (kind == NodeType::Project) != is_project {
-                    bail!("a project cannot become another type, and other types cannot become projects");
+                if (kind == NodeType::Collection) != is_project {
+                    bail!(
+                        "a collection cannot become another type, and other types cannot become collections"
+                    );
                 }
                 node.kind = kind.as_str().to_string();
                 if kind == NodeType::Todo {
@@ -693,7 +708,7 @@ impl App {
             }
             if let Some(project) = project {
                 if is_project {
-                    bail!("a project cannot be inside another project");
+                    bail!("a collection cannot be inside another collection");
                 }
                 let name = project_name(Some(&project))?;
                 node.project_id = Some(store::ensure_project(
@@ -737,11 +752,11 @@ impl App {
             if node.deleted_at.is_some() {
                 bail!("`{}` is already dropped", node.short());
             }
-            if node.kind == "project" {
+            if node.kind == "collection" {
                 let children = store::live_children(&self.conn, &id)?;
                 if children > 0 {
                     bail!(
-                        "project '{}' still holds {children} node(s); drop or move them first",
+                        "collection '{}' still holds {children} node(s); drop or move them first",
                         node.title
                     );
                 }
@@ -774,8 +789,9 @@ impl App {
             bail!("`{}` is not dropped", node.short());
         }
         store::write(&self.conn, || {
-            if node.kind == "project" && store::find_project(&self.conn, &node.title)?.is_some() {
-                bail!("another project is now called '{}'", node.title);
+            if node.kind == "collection" && store::find_project(&self.conn, &node.title)?.is_some()
+            {
+                bail!("another collection is now called '{}'", node.title);
             }
             store::restore(&self.conn, &self.an, &id)
         })?;
@@ -785,7 +801,7 @@ impl App {
 
     fn todo_list(&self, project: Option<&str>, all: bool, done: bool) -> Result<()> {
         let (scope, project_id) = if all && project.is_none() {
-            ("all projects".to_string(), None)
+            ("all collections".to_string(), None)
         } else {
             let name = project_name(project)?;
             match store::find_project(&self.conn, &name)? {
@@ -917,8 +933,7 @@ impl App {
     fn export(&self, project: Option<&str>) -> Result<()> {
         let project_id = match project {
             Some(name) => Some(
-                store::find_project(&self.conn, name.trim())?
-                    .ok_or_else(|| anyhow!("no project named '{name}' (see `son projects`)"))?,
+                store::find_project(&self.conn, name.trim())?.ok_or_else(|| no_collection(name))?,
             ),
             None => None,
         };
@@ -941,8 +956,9 @@ impl App {
         } else {
             std::fs::read_to_string(file).with_context(|| format!("cannot read {file}"))?
         };
-        let dump: transfer::Dump = serde_json::from_str(&text)
+        let mut dump: transfer::Dump = serde_json::from_str(&text)
             .context("this is not a son JSON export (make one with `son export --json`)")?;
+        dump.upgrade()?;
         self.note(|draft| draft.detail = Some(file.to_string()));
         let stats = transfer::import(&self.conn, &self.an, &dump)?;
         self.note(|draft| draft.results = Some((stats.added + stats.updated) as i64));
@@ -950,8 +966,8 @@ impl App {
             render::print_json(&serde_json::to_value(&stats)?);
         } else {
             println!(
-                "imported: {} added, {} updated, {} unchanged, {} projects merged by name, {} links, {} synonyms",
-                stats.added, stats.updated, stats.unchanged, stats.merged_projects, stats.edges, stats.synonyms
+                "imported: {} added, {} updated, {} unchanged, {} collections merged by name, {} links, {} synonyms",
+                stats.added, stats.updated, stats.unchanged, stats.merged_collections, stats.edges, stats.synonyms
             );
         }
         Ok(())
@@ -962,10 +978,10 @@ impl App {
         self.note(|draft| draft.project = Some(name.clone()));
         let Some(project_id) = store::find_project(&self.conn, &name)? else {
             if self.json {
-                render::print_json(&json!({ "project": null, "name": name }));
+                render::print_json(&json!({ "collection": null, "name": name }));
             } else {
-                println!("# Context: {name}\n\nNothing is stored for this project yet.");
-                println!("`son recall <terms>` still searches every other project.");
+                println!("# Context: {name}\n\nNothing is stored for this collection yet.");
+                println!("`son recall <terms>` still searches every other collection.");
             }
             return Ok(());
         };

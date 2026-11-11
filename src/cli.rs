@@ -6,8 +6,9 @@ use clap::{Parser, Subcommand, ValueEnum};
     version,
     about = "Local second brain for Claude sessions",
     long_about = "son stores decisions, patterns, facts, notes and todos in one local SQLite file \
-and finds them again from any project. Every node belongs to a project; recall searches \
-all projects and lists the current project's matches first."
+and finds them again from anywhere. Every node belongs to a collection: a code repository, \
+or any other group such as \"household\". Recall searches all collections and lists the \
+current collection's matches first."
 )]
 pub struct Cli {
     /// Print JSON instead of markdown
@@ -20,7 +21,7 @@ pub struct Cli {
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum NodeType {
-    Project,
+    Collection,
     Todo,
     Decision,
     Pattern,
@@ -31,7 +32,7 @@ pub enum NodeType {
 impl NodeType {
     pub fn as_str(self) -> &'static str {
         match self {
-            NodeType::Project => "project",
+            NodeType::Collection => "collection",
             NodeType::Todo => "todo",
             NodeType::Decision => "decision",
             NodeType::Pattern => "pattern",
@@ -135,7 +136,7 @@ pub enum Command {
         #[arg(long)]
         print_skill: bool,
     },
-    /// Save a node: decision, pattern, fact, note, todo or project
+    /// Save a node: decision, pattern, fact, note, todo or collection
     Remember {
         #[arg(value_enum)]
         kind: NodeType,
@@ -143,9 +144,9 @@ pub enum Command {
         /// Body text, or "-" to read it from stdin
         #[arg(long)]
         body: Option<String>,
-        /// Project to save to (default: the detected project)
+        /// Collection to save to (default: the current collection)
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// Comma-separated tags
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
@@ -160,16 +161,16 @@ pub enum Command {
         #[arg(long = "ref", value_name = "KIND:VALUE")]
         refs: Vec<String>,
     },
-    /// Search all projects; the current project's matches come first
+    /// Search all collections; the current collection's matches come first
     Recall {
         #[arg(required = true)]
         query: Vec<String>,
         /// Only this node type
         #[arg(long = "type", value_enum)]
         kind: Option<NodeType>,
-        /// Only this project
+        /// Only this collection
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// How many matches to show
         #[arg(long, default_value_t = 5)]
         limit: usize,
@@ -191,9 +192,9 @@ pub enum Command {
         kind: Option<NodeType>,
         #[arg(long)]
         status: Option<String>,
-        /// Move the node to this project
+        /// Move the node to this collection
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// Replace the tags (comma-separated; "" clears them)
         #[arg(long, value_delimiter = ',')]
         tag: Option<Vec<String>>,
@@ -251,8 +252,8 @@ pub enum Command {
         relation: Relation,
         to: String,
     },
-    /// List projects
-    Projects,
+    /// List collections: the groups that nodes belong to
+    Collections,
     /// Manage query synonyms (tf -> terraform)
     Synonym {
         #[command(subcommand)]
@@ -260,25 +261,25 @@ pub enum Command {
     },
     /// Dump nodes as markdown, or as JSON with --json (the backup format)
     Export {
-        /// Only this project
+        /// Only this collection
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
     },
     /// Load a JSON export ("-" reads stdin)
     Import { file: String },
-    /// Print what is stored for a project, for the start of a session
+    /// Print what is stored for a collection, for the start of a session
     Context {
-        /// Project to show (default: the detected project)
+        /// Collection to show (default: the current collection)
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
     },
     /// Rebuild the search index
     Reindex,
     /// List nodes, most recently changed first
     List {
-        /// Only this project (default: every project)
+        /// Only this collection (default: every collection)
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// Only this node type
         #[arg(long = "type", value_enum)]
         kind: Option<NodeType>,
@@ -294,9 +295,9 @@ pub enum Command {
     },
     /// Show the commands that were run, newest first
     Log {
-        /// Only commands run for this project
+        /// Only commands run for this collection
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// Only this command, for example recall or "todo add"
         #[arg(long)]
         command: Option<String>,
@@ -329,9 +330,9 @@ pub enum TodoCommand {
         /// Body text, or "-" to read it from stdin
         #[arg(long)]
         body: Option<String>,
-        /// Project to save to (default: the detected project)
+        /// Collection to save to (default: the current collection)
         #[arg(long)]
-        project: Option<String>,
+        collection: Option<String>,
         /// Comma-separated tags
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
@@ -342,12 +343,12 @@ pub enum TodoCommand {
         #[arg(long = "ref", value_name = "KIND:VALUE")]
         refs: Vec<String>,
     },
-    /// List open todos for the current project
+    /// List open todos for the current collection
     List {
-        /// Only this project
+        /// Only this collection
         #[arg(long)]
-        project: Option<String>,
-        /// Every project, not only the current one
+        collection: Option<String>,
+        /// Every collection, not only the current one
         #[arg(long)]
         all: bool,
         /// Include done and dropped todos

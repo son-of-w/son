@@ -118,9 +118,9 @@ pub fn nodes_page(
     limit: usize,
     page: usize,
 ) -> Result<Page<Change>> {
-    // Project nodes are left out unless asked for: `son projects` lists them.
+    // Collections are left out unless asked for: `son collections` lists them.
     let conditions = "(?1 IS NULL OR n.project_id = ?1) \
-         AND ((?2 IS NULL AND n.type != 'project') OR n.type = ?2) \
+         AND ((?2 IS NULL AND n.type != 'collection') OR n.type = ?2) \
          AND (?3 OR n.deleted_at IS NULL)";
     let total: i64 = conn.query_row(
         &format!("SELECT count(*) FROM nodes n WHERE {conditions}"),
@@ -168,6 +168,7 @@ pub struct EventRow {
     pub command: String,
     pub kind: String,
     pub ok: bool,
+    #[serde(rename = "collection")]
     pub project: Option<String>,
     pub source: Option<String>,
     pub node_id: Option<String>,
@@ -245,6 +246,7 @@ pub struct Count {
 pub struct StoreStats {
     pub nodes: i64,
     pub by_type: Vec<Count>,
+    #[serde(rename = "collections")]
     pub projects: i64,
     pub dropped: i64,
     pub links: i64,
@@ -303,6 +305,7 @@ pub struct Stats {
     pub activity: ActivityStats,
     pub recall: RecallStats,
     pub by_command: Vec<Count>,
+    #[serde(rename = "by_collection")]
     pub by_project: Vec<Count>,
     pub by_day: Vec<Day>,
     pub first_event_at: Option<String>,
@@ -346,7 +349,7 @@ pub fn stats(conn: &Connection, days: Option<u32>) -> Result<Stats> {
     let mut by_type = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT type, count(*) FROM nodes WHERE deleted_at IS NULL AND type != 'project' \
+            "SELECT type, count(*) FROM nodes WHERE deleted_at IS NULL AND type != 'collection' \
              GROUP BY type ORDER BY count(*) DESC, type",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -367,9 +370,9 @@ pub fn stats(conn: &Connection, days: Option<u32>) -> Result<Stats> {
         )?)
     };
     let store = StoreStats {
-        nodes: one("SELECT count(*) FROM nodes WHERE deleted_at IS NULL AND type != 'project'")?,
+        nodes: one("SELECT count(*) FROM nodes WHERE deleted_at IS NULL AND type != 'collection'")?,
         by_type,
-        projects: one("SELECT count(*) FROM nodes WHERE deleted_at IS NULL AND type = 'project'")?,
+        projects: one("SELECT count(*) FROM nodes WHERE deleted_at IS NULL AND type = 'collection'")?,
         dropped: one("SELECT count(*) FROM nodes WHERE deleted_at IS NOT NULL")?,
         links: one("SELECT count(*) FROM edges")?,
         tags: one("SELECT count(DISTINCT tag) FROM tags")?,
@@ -382,7 +385,7 @@ pub fn stats(conn: &Connection, days: Option<u32>) -> Result<Stats> {
              AND status = 'open' AND julianday('now') - julianday(created_at) > 30",
         )?,
         first_node_at: text(
-            "SELECT strftime('%Y-%m-%d', min(created_at), 'localtime') FROM nodes WHERE type != 'project'",
+            "SELECT strftime('%Y-%m-%d', min(created_at), 'localtime') FROM nodes WHERE type != 'collection'",
         )?,
         last_change_at: text(
             "SELECT strftime('%Y-%m-%d %H:%M', max(updated_at), 'localtime') FROM nodes",

@@ -1,15 +1,15 @@
 # son-of-w
 
-`son` is a local second brain for AI coding agents: Claude Code, Codex, Cursor, Antigravity, Gemini CLI and about 70 more. It is one binary and one SQLite file. A session calls it from the shell to save and find decisions, patterns, facts, notes and todos, so that a new session in any project can pick up what earlier sessions learned.
+`son` is a local second brain for AI coding agents: Claude Code, Codex, Cursor, Antigravity, Gemini CLI and about 70 more. It is one binary and one SQLite file. A session calls it from the shell to save and find decisions, patterns, facts, notes and todos, so that a new session anywhere can pick up what earlier sessions learned. It is not only for code: a collection can hold household, travel or personal memory as well as a repository's.
 
 There is no server, no MCP, no hook and no model. An agent uses it because `son init` gives the agent a skill and a short block in its instruction file that tell it to.
 
 ```
 $ son recall terraform aws
-# Recall: terraform aws (current project: billing-api)
+# Recall: terraform aws (current collection: billing-api)
 
 ## `gf3b5fke` [pattern] Terraform AWS layout
-project: infra · tags: aws, terraform · updated 2026-11-11
+collection: infra · tags: aws, terraform · updated 2026-11-11
 
 One module per service. Remote state in S3 with a DynamoDB lock.
 ```
@@ -92,8 +92,9 @@ son init --yes
 
 ## How it works
 
-- **Every node belongs to a project.** The project is found from a `.son-project` file in the directory or a parent, else the git remote's repo name, else the git root's directory name, else the current directory's name. `--project <name>` overrides it.
-- **Recall searches every project.** Matches from the current project come first; matches from other projects follow. This is how memory crosses sessions and projects.
+- **Every node belongs to a collection.** A collection is a group of nodes: a code repository, or any other subject such as `household` or `travel`. The current collection is, in this order: `--collection <name>` on the command; the `SON_COLLECTION` environment variable; a `.son-collection` file in the directory or a parent; the git remote's repo name; the git root's directory name; the current directory's name. So a coding agent needs to do nothing, and an agent that does not work in a repository names its collection once and gets the same one from any directory. `son collections` lists them.
+- **Recall searches every collection.** Matches from the current collection come first; matches from other collections follow. `--collection <name>` keeps only one. This is how memory crosses sessions and subjects.
+- **Collections organize; they do not restrict.** Every agent that uses the database can read every collection. A collection is not a security boundary.
 - **Search uses no model.** Text is split (including `camelCase` and `snake_case`), stop words are removed, words are stemmed, and synonyms such as `tf` → `terraform` are applied to the query. Ranking is BM25 with adjustments for title and tag matches, node type, recency and superseded decisions.
 - **Near misses still match.** When the exact words find too few nodes, recall also takes the start of a word (`terra` finds `terraform`) and typos (`terrafrom` finds `terraform`). These are marked `close match` and listed after exact matches.
 - **Links connect nodes.** `son link <from> <relation> <to>` with `relates_to`, `supersedes`, `depends_on`, `derived_from` or `belongs_to`. Recall follows links one hop (or two) from its matches. A superseded decision is kept and ranked lower.
@@ -104,33 +105,33 @@ son init --yes
 
 ```
 son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
-son remember <type> "<title>" [--body <text>|-] [--project <name>] [--tag a,b] [--link <id>:<relation>]
+son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b] [--link <id>:<relation>]
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
-son recall <terms...> [--type <type>] [--project <name>] [--limit 5] [--hops 1]
+son recall <terms...> [--type <type>] [--collection <name>] [--limit 5] [--hops 1]
 son show <id>
-son edit <id> [--title] [--body] [--type] [--status] [--project] [--tag] [--evidence] [--ref] [--unref]
+son edit <id> [--title] [--body] [--type] [--status] [--collection] [--tag] [--evidence] [--ref] [--unref]
 son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
 son drop <id> [--purge]
 son restore <id>
-son todo add "<title>" [--project <name>] [--tag a,b]
-son todo list [--project <name>] [--all] [--done]
+son todo add "<title>" [--collection <name>] [--tag a,b]
+son todo list [--collection <name>] [--all] [--done]
 son todo done <id>
 son link <from> <relation> <to>
 son unlink <from> <relation> <to>
-son projects
-son context [--project <name>]             what a project holds, for the start of a session
+son collections
+son context [--collection <name>]          what a collection holds, for the start of a session
 son synonym add <term> <canonical> | list | remove <term>
-son export [--project <name>]              markdown; add --json for the backup format
+son export [--collection <name>]           markdown; add --json for the portable format
 son import <file|->                        load a JSON export
 son reindex
-son list [--project <name>] [--type <type>] [--dropped] [--limit 20] [--page 1]
-son log [--project <name>] [--command <name>] [--errors] [--limit 20] [--page 1]
+son list [--collection <name>] [--type <type>] [--dropped] [--limit 20] [--page 1]
+son log [--collection <name>] [--command <name>] [--errors] [--limit 20] [--page 1]
 son stats [--days 30 | --all]
 ```
 
 `son list` shows nodes, most recently changed first. `son log` shows every command that was run: what was recalled, how many results it gave, what was saved, and what failed. `son stats` shows how much is stored and how `son` is being used: commands per day, how often a recall finds something, the queries that found nothing, writes for each recall, and recall speed. The log is local; set `SON_NO_LOG=1` to turn it off, and set `SON_SOURCE` to a session name to have it recorded.
 
-Types are `project`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
+Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
 
 Set `SON_DB` to use a different database file. Many sessions can use the database at the same time: a session that finds it locked waits for up to 10 seconds, then fails with a message and changes nothing. Set `SON_BUSY_MS` to change that wait (in milliseconds).
 

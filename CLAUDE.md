@@ -23,7 +23,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage a
 - `src/cli.rs` — the command line (clap)
 - `src/app.rs` — runs one command
 - `src/db.rs` — open, schema, migration
-- `src/project.rs` — which project the current directory is
+- `src/project.rs` — which collection a command works in (`SON_COLLECTION`, a marker file, the repository, the directory)
 - `src/analyze.rs` — tokenize, split, stem, synonyms
 - `src/store.rs` — nodes, tags, edges, synonyms
 - `src/search.rs` — recall: ranking and graph expansion

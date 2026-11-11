@@ -213,7 +213,7 @@ fn corpus_is_the_size_the_plan_asks_for() {
     let count: i64 = corpus
         .conn
         .query_row(
-            "SELECT count(*) FROM nodes WHERE type != 'project'",
+            "SELECT count(*) FROM nodes WHERE type != 'collection'",
             [],
             |r| r.get(0),
         )

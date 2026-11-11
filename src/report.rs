@@ -227,7 +227,7 @@ pub fn stats(stats: &Stats, database: &Path, installed: &[std::path::PathBuf], j
     println!(
         "- {} in {}{}",
         count(store.nodes, "node"),
-        count(store.projects, "project"),
+        count(store.projects, "collection"),
         if store.by_type.is_empty() {
             String::new()
         } else {
@@ -312,7 +312,7 @@ pub fn stats(stats: &Stats, database: &Path, installed: &[std::path::PathBuf], j
         println!("\n## Commands\n{}", inline(&stats.by_command));
     }
     if !stats.by_project.is_empty() {
-        println!("\n## Projects\n{}", inline(&stats.by_project));
+        println!("\n## Collections\n{}", inline(&stats.by_project));
     }
     if !stats.by_day.is_empty() {
         println!("\n## By day");

@@ -336,7 +336,7 @@ fn expand(
 fn also_in_projects(conn: &Connection, hits: &[Hit], seen: &HashSet<String>) -> Result<Vec<Node>> {
     let mut projects: Vec<&str> = Vec::new();
     for hit in hits {
-        let project = if hit.node.kind == "project" {
+        let project = if hit.node.kind == "collection" {
             Some(hit.node.id.as_str())
         } else {
             hit.node.project_id.as_deref()

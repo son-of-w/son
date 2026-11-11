@@ -14,10 +14,11 @@ pub const END: &str = "<!-- son:end -->";
 
 const BODY: &str = r#"## Shared memory: `son`
 
-`son` is a local command that keeps decisions, patterns, facts and todos across all sessions, all projects and all AI agents. Use it through the shell. This block is managed by `son init`; changes made inside it are overwritten.
+`son` is a local command that keeps decisions, patterns, facts and todos across all sessions, all collections and all AI agents. A collection is a group of nodes: a code repository, or any other subject such as "household". Use it through the shell. This block is managed by `son init`; changes made inside it are overwritten.
 
-- At the start of a session, run `son context` and treat the output as prior context for this project.
-- Before any non-trivial task, run `son recall <terms>` with three to five related terms: tool names, cloud providers, the project name. Recall searches every project and lists the current project's matches first.
+- At the start of a session, run `son context` and treat the output as prior context for the current collection.
+- Before any non-trivial task, run `son recall <terms>` with three to five related terms: tool names, product names, the name of the subject. Recall searches every collection and lists the current collection's matches first.
+- In a repository the current collection is the repository. For work that is not in a repository, name the collection: `--collection household`, or set `SON_COLLECTION`.
 - When a decision is made, a way of configuring something is settled, or a todo is created or finished, record it at once:
   - `son remember <decision|pattern|fact|note> "<title>" --body "<text>" --tag a,b`
   - `son todo add "<title>"` and `son todo done <id>`
@@ -44,17 +45,17 @@ pub const SKILL_MARK: &str = "# son: shared memory";
 
 const SKILL: &str = r#"---
 name: son
-description: Shared memory across sessions, projects and AI agents, kept by the local `son` command. Use it at the start of a session, before any non-trivial task (to recall how things are normally set up, past decisions and open todos), and whenever a decision is made, a setup is settled, a todo is created or finished, or the user says "remember this" or "I need to do this".
+description: Shared memory across sessions, collections and AI agents, kept by the local `son` command. Use it at the start of a session, before any non-trivial task (to recall how things are normally set up, past decisions and open todos), and whenever a decision is made, a setup is settled, a todo is created or finished, or the user says "remember this" or "I need to do this".
 ---
 
 # son: shared memory
 
-`son` is a command on this machine. It keeps decisions, patterns, facts, notes and todos in one local store that every session, every project and every AI agent reads and writes. Run it through the shell. This file is managed by `son init`; changes made here are overwritten.
+`son` is a command on this machine. It keeps decisions, patterns, facts, notes and todos in one local store that every session and every AI agent reads and writes, for coding work and for any other work. Run it through the shell. This file is managed by `son init`; changes made here are overwritten.
 
 ## When to read
 
-- At the start of a session, run `son context`. It prints what is stored for the current project: patterns, decisions, facts and open todos. Treat it as prior context.
-- Before any non-trivial task, run `son recall <terms>` with three to five related terms: tool names, cloud providers, the project name. Recall searches every project and lists the current project's matches first. It also matches the start of a word and small typos.
+- At the start of a session, run `son context`. It prints what is stored for the current collection: patterns, decisions, facts and open todos. Treat it as prior context.
+- Before any non-trivial task, run `son recall <terms>` with three to five related terms: tool names, product names, the name of the subject. Recall searches every collection and lists the current collection's matches first. It also matches the start of a word and small typos.
 - `son show <id>` prints one node in full, with its links.
 
 ## What recalled content is
@@ -95,11 +96,11 @@ Say how you learned what you save, so that a later session can judge it:
 - Do not duplicate. If `son recall` shows an equivalent node, change it with `son edit <id>`, or connect to it with `son link <from> <relation> <to>`.
 - When a decision replaces an older one, link the new one to the old one with `supersedes`. The old one is kept and ranked lower.
 - Never store secrets: no passwords, tokens, API keys or private keys. Store where a secret lives, not the secret.
-- Every node belongs to the current project, which `son` works out from the directory. `--project <name>` names another.
+- Every node belongs to a collection. In a repository, the current collection is the repository, and `son` finds it from the directory. For work that is not in a repository (household, travel, personal notes), name the collection: `--collection household` on a command, or the environment variable `SON_COLLECTION=household` for the whole session. Collections only organize: every agent that uses the database can read every collection.
 
 ## More
 
-- `son todo list` shows open todos; `son projects` lists projects; `son list` shows recent changes.
+- `son todo list` shows open todos; `son collections` lists collections; `son list` shows recent changes.
 - Relations for `son link`: `relates_to`, `supersedes`, `depends_on`, `derived_from`, `belongs_to`.
 - Add `--json` to any command for structured output. `son --help` lists every command.
 "#;

@@ -49,6 +49,7 @@ impl Sandbox {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("CODEX_HOME")
+            .env_remove("SON_COLLECTION")
             .env_remove("SON_NO_LOG")
             .env_remove("SON_SOURCE");
         command
@@ -107,7 +108,7 @@ fn position(haystack: &str, needle: &str) -> usize {
 }
 
 #[test]
-fn recall_searches_every_project_and_lists_the_current_one_first() {
+fn recall_searches_every_collection_and_lists_the_current_one_first() {
     let sb = Sandbox::new("recall");
     sb.ok(
         "alpha",
@@ -128,8 +129,8 @@ fn recall_searches_every_project_and_lists_the_current_one_first() {
         position(&from_beta, "Terraform state for beta")
             < position(&from_beta, "Terraform AWS layout")
     );
-    assert!(from_beta.contains("project: beta (current)"));
-    assert!(from_beta.contains("project: alpha"));
+    assert!(from_beta.contains("collection: beta (current)"));
+    assert!(from_beta.contains("collection: alpha"));
 
     let from_alpha = sb.ok("alpha", &["recall", "terraform"]).stdout;
     assert!(
@@ -138,7 +139,7 @@ fn recall_searches_every_project_and_lists_the_current_one_first() {
     );
 
     let only_alpha = sb
-        .ok("beta", &["recall", "terraform", "--project", "alpha"])
+        .ok("beta", &["recall", "terraform", "--collection", "alpha"])
         .stdout;
     assert!(!only_alpha.contains("Terraform state for beta"));
 
@@ -149,7 +150,7 @@ fn recall_searches_every_project_and_lists_the_current_one_first() {
 }
 
 #[test]
-fn recall_from_a_project_with_nothing_stored_still_finds_other_projects() {
+fn recall_from_a_collection_with_nothing_stored_still_finds_other_collections() {
     let sb = Sandbox::new("empty");
     sb.ok(
         "alpha",
@@ -184,7 +185,7 @@ fn short_ids_show_edit_and_reindex() {
 
     let shown = sb.ok("beta", &["show", &id]).stdout;
     assert!(shown.contains("# Use Postgres"));
-    assert!(shown.contains("project: alpha"));
+    assert!(shown.contains("collection: alpha"));
 
     // The full id and a shorter tail both work.
     let full = sb.ok("alpha", &["--json", "show", &id]).json()["id"]
@@ -231,11 +232,11 @@ fn short_ids_show_edit_and_reindex() {
     assert!(!sb.son("alpha", &["show", "ab"]).ok);
 
     // Moving a node creates the target project when needed.
-    sb.ok("alpha", &["edit", &id, "--project", "gamma"]);
+    sb.ok("alpha", &["edit", &id, "--collection", "gamma"]);
     assert!(sb
         .ok("alpha", &["show", &id])
         .stdout
-        .contains("project: gamma"));
+        .contains("collection: gamma"));
 
     sb.ok("alpha", &["reindex"]);
     assert!(sb
@@ -271,7 +272,7 @@ fn drop_hides_restore_brings_back_purge_removes() {
 
     // A project that still holds nodes cannot be dropped.
     sb.ok("alpha", &["remember", "note", "Keeps the project alive"]);
-    let projects = sb.ok("alpha", &["--json", "projects"]).json();
+    let projects = sb.ok("alpha", &["--json", "collections"]).json();
     let project = projects[0]["short_id"].as_str().unwrap().to_string();
     assert!(!sb.son("alpha", &["drop", &project]).ok);
 }
@@ -310,20 +311,173 @@ fn todos_add_list_done() {
 }
 
 #[test]
-fn son_project_file_names_the_project() {
+fn a_marker_file_names_the_collection() {
     let sb = Sandbox::new("marker");
     let nested = sb.root.join("alpha").join("deep").join("er");
     std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(sb.root.join("alpha").join(".son-project"), "billing-api\n").unwrap();
+    std::fs::write(
+        sb.root.join("alpha").join(".son-collection"),
+        "billing-api\n",
+    )
+    .unwrap();
 
     let out = sb
         .ok("alpha/deep/er", &["remember", "note", "Lives in billing"])
         .stdout;
     assert!(out.contains("(billing-api)"));
     assert!(sb
-        .ok("alpha", &["projects"])
+        .ok("alpha", &["collections"])
         .stdout
         .contains("billing-api (current)"));
+}
+
+#[test]
+fn a_collection_can_be_chosen_without_a_repository() {
+    let sb = Sandbox::new("collections");
+    // A household agent names its collection; the directory does not matter.
+    sb.ok(
+        "alpha",
+        &[
+            "remember",
+            "fact",
+            "Boiler model is Vaillant ecoTEC",
+            "--collection",
+            "household",
+        ],
+    );
+    sb.ok(
+        "beta",
+        &[
+            "todo",
+            "add",
+            "Bleed the radiators",
+            "--collection",
+            "household",
+        ],
+    );
+    sb.ok(
+        "alpha",
+        &["remember", "fact", "Alpha uses a boiler plate generator"],
+    );
+
+    // Recall from an unrelated directory searches every collection.
+    let recall = sb.ok("beta", &["recall", "boiler"]).stdout;
+    assert!(recall.contains("collection: household"), "{recall}");
+    assert!(recall.contains("collection: alpha"), "{recall}");
+    // A filter narrows it.
+    let only = sb
+        .ok("beta", &["recall", "boiler", "--collection", "household"])
+        .stdout;
+    assert!(
+        only.contains("Vaillant") && !only.contains("boiler plate"),
+        "{only}"
+    );
+    let context = sb
+        .ok("beta", &["context", "--collection", "household"])
+        .stdout;
+    assert!(context.contains("# Context: household") && context.contains("Bleed the radiators"));
+
+    // SON_COLLECTION makes it the current collection anywhere: its matches
+    // come first, and new nodes go to it.
+    let run = |dir: &str, args: &[&str]| {
+        let out = sb
+            .command(dir, args)
+            .env("SON_COLLECTION", "household")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let recall = run("alpha", &["recall", "boiler"]);
+    assert!(
+        recall.contains("(current collection: household)"),
+        "{recall}"
+    );
+    assert!(position(&recall, "Vaillant") < position(&recall, "boiler plate"));
+    assert!(run("alpha", &["remember", "note", "Filter size is 20x25"]).contains("(household)"));
+    assert!(run("beta", &["todo", "list"]).contains("Bleed the radiators"));
+    // --collection wins over SON_COLLECTION.
+    assert!(run(
+        "beta",
+        &["remember", "note", "Trip idea", "--collection", "travel"]
+    )
+    .contains("(travel)"));
+
+    // The list says collections; the old names are gone.
+    let list = sb.ok("alpha", &["collections"]).stdout;
+    assert!(list.starts_with("# Collections"), "{list}");
+    assert!(
+        list.contains("household") && list.contains("travel") && list.contains("alpha (current)")
+    );
+    let json = sb.ok("alpha", &["--json", "collections"]).json();
+    assert_eq!(json[0]["type"], "collection");
+    for old in [
+        vec!["projects"],
+        vec!["recall", "boiler", "--project", "household"],
+        vec!["remember", "note", "x", "--project", "household"],
+        vec!["context", "--project", "household"],
+        vec!["list", "--project", "household"],
+        vec!["remember", "project", "new-one"],
+    ] {
+        let out = sb.son("alpha", &old);
+        assert!(!out.ok, "{old:?} should be rejected");
+    }
+    sb.ok(
+        "alpha",
+        &[
+            "remember",
+            "collection",
+            "garden",
+            "--body",
+            "Plants and tools.",
+        ],
+    );
+    let missing = sb.son("alpha", &["list", "--collection", "nope"]);
+    assert!(missing
+        .stderr
+        .contains("no collection named 'nope' (see `son collections`)"));
+
+    // The older marker file name is still read.
+    std::fs::write(sb.root.join("beta").join(".son-project"), "legacy-name\n").unwrap();
+    assert!(sb
+        .ok("beta", &["remember", "note", "From an old marker"])
+        .stdout
+        .contains("(legacy-name)"));
+}
+
+#[test]
+fn an_export_from_before_collections_is_still_read() {
+    let sb = Sandbox::new("old-export");
+    let file = sb.root.join("old.json");
+    std::fs::write(
+        &file,
+        r#"{"version":1,"exported_at":"2026-11-01T00:00:00.000Z","nodes":[
+          {"id":"01JOLD00000000000000PRJCT1","type":"project","title":"legacy",
+           "created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-01T00:00:00.000Z"},
+          {"id":"01JOLD00000000000000NOTE01","type":"note","title":"Old note",
+           "project_id":"01JOLD00000000000000PRJCT1","project":"legacy",
+           "created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-01T00:00:00.000Z"}]}"#,
+    )
+    .unwrap();
+    sb.ok("alpha", &["import", file.to_str().unwrap()]);
+    let shown = sb.ok("alpha", &["--json", "show", "PRJCT1"]).json();
+    assert_eq!(shown["type"], "collection");
+    let note = sb.ok("alpha", &["--json", "show", "NOTE01"]).json();
+    assert_eq!(note["collection"], "legacy");
+    assert_eq!(note["collection_id"], "01JOLD00000000000000PRJCT1");
+    assert!(note.get("project").is_none() && note.get("project_id").is_none());
+    // The export now says collection, and the collection keeps its id.
+    let dump = sb.ok("alpha", &["--json", "export"]).json();
+    assert_eq!(dump["version"], 2);
+    assert_eq!(dump["nodes"][0]["type"], "collection");
+    assert_eq!(dump["nodes"][0]["id"], "01JOLD00000000000000PRJCT1");
+    // A version this son does not know is refused.
+    std::fs::write(&file, r#"{"version":99,"exported_at":"x","nodes":[]}"#).unwrap();
+    assert!(!sb.son("alpha", &["import", file.to_str().unwrap()]).ok);
 }
 
 #[test]
@@ -414,7 +568,7 @@ fn links_and_superseded_decisions() {
 }
 
 #[test]
-fn context_prints_what_a_project_holds() {
+fn context_prints_what_a_collection_holds() {
     let sb = Sandbox::new("context");
     sb.ok(
         "alpha",
@@ -453,7 +607,7 @@ fn context_prints_what_a_project_holds() {
     assert!(out.contains("Add remote state") && !out.contains("Already finished"));
 
     assert!(sb
-        .ok("beta", &["context", "--project", "alpha"])
+        .ok("beta", &["context", "--collection", "alpha"])
         .stdout
         .contains("# Context: alpha"));
     assert!(sb
@@ -480,16 +634,16 @@ fn json_output_is_valid_on_every_command() {
         .json();
     let id = saved["short_id"].as_str().unwrap().to_string();
     assert_eq!(saved["type"], "pattern");
-    assert_eq!(saved["project"], "alpha");
+    assert_eq!(saved["collection"], "alpha");
     assert_eq!(saved["tags"], serde_json::json!(["a", "b"]));
 
     let recall = sb.ok("alpha", &["recall", "json", "--json"]).json();
     assert_eq!(recall["hits"][0]["title"], "JSON shaped");
-    assert_eq!(recall["hits"][0]["current_project"], true);
+    assert_eq!(recall["hits"][0]["current_collection"], true);
 
     for args in [
         vec!["show", id.as_str()],
-        vec!["projects"],
+        vec!["collections"],
         vec!["todo", "list"],
         vec!["context"],
         vec!["synonym", "list"],
@@ -534,7 +688,7 @@ fn export_and_import_round_trip() {
 
     let markdown = sb.ok("alpha", &["export"]).stdout;
     assert!(
-        markdown.contains("## Project: alpha")
+        markdown.contains("## Collection: alpha")
             && markdown.contains("### [pattern] One SQLite file")
     );
 
@@ -568,10 +722,10 @@ fn export_and_import_round_trip() {
     let third = Sandbox::new("export-merge");
     third.ok("alpha", &["remember", "note", "Already here"]);
     let merged = third.ok("alpha", &["--json", "import", file]).json();
-    assert_eq!(merged["merged_projects"], 1);
+    assert_eq!(merged["merged_collections"], 1);
     assert_eq!(
         third
-            .ok("alpha", &["--json", "projects"])
+            .ok("alpha", &["--json", "collections"])
             .json()
             .as_array()
             .unwrap()
@@ -581,7 +735,7 @@ fn export_and_import_round_trip() {
     assert!(third
         .ok("alpha", &["show", &a])
         .stdout
-        .contains("project: alpha"));
+        .contains("collection: alpha"));
 
     assert!(!third.son("alpha", &["import", "/no/such/file.json"]).ok);
 }
@@ -1044,7 +1198,7 @@ fn parallel_sessions_do_not_collide() {
     assert_eq!(todos.as_array().unwrap().len(), 16);
     // Sixteen first writes at once still make exactly one project.
     assert_eq!(
-        sb.ok("alpha", &["--json", "projects"])
+        sb.ok("alpha", &["--json", "collections"])
             .json()
             .as_array()
             .unwrap()
@@ -1084,7 +1238,7 @@ fn parallel_writes_to_an_existing_database_keep_every_record() {
         .json();
     assert_eq!(facts["total"], 16, "{facts}");
     assert_eq!(
-        sb.ok("alpha", &["--json", "projects"])
+        sb.ok("alpha", &["--json", "collections"])
             .json()
             .as_array()
             .unwrap()
@@ -1209,11 +1363,11 @@ fn list_pages_through_nodes_newest_change_first() {
     // Filters.
     let todos = sb.ok("alpha", &["list", "--type", "todo"]).stdout;
     assert!(todos.contains("A todo in beta") && !todos.contains("Note number"));
-    let alpha = sb.ok("beta", &["list", "--project", "alpha"]).stdout;
+    let alpha = sb.ok("beta", &["list", "--collection", "alpha"]).stdout;
     assert!(alpha.contains("Note number 3") && !alpha.contains("A todo in beta"));
     let dropped = sb.ok("alpha", &["list", "--dropped"]).stdout;
     assert!(dropped.contains("dropped") && dropped.contains("Note number 2"));
-    assert!(!sb.son("alpha", &["list", "--project", "nope"]).ok);
+    assert!(!sb.son("alpha", &["list", "--collection", "nope"]).ok);
     assert!(!sb.son("alpha", &["list", "--page", "0"]).ok);
 
     let json = sb.ok("alpha", &["--json", "list", "--limit", "2"]).json();
@@ -1264,7 +1418,7 @@ fn log_records_every_command_and_pages() {
     assert!(recalls.contains("page 1 of 2 (3 commands)"));
     assert!(recalls.contains("Next page: `son log --command \"recall\" --limit 2 --page 2`"));
     assert!(sb
-        .ok("alpha", &["log", "--project", "beta"])
+        .ok("alpha", &["log", "--collection", "beta"])
         .stdout
         .contains("No commands"));
 
@@ -1299,7 +1453,7 @@ fn log_records_every_command_and_pages() {
 fn stats_show_the_store_and_how_son_is_used() {
     let sb = Sandbox::new("stats");
     let empty = sb.ok("alpha", &["stats"]).stdout;
-    assert!(empty.contains("0 nodes in 0 projects"));
+    assert!(empty.contains("0 nodes in 0 collections"));
     assert!(empty.contains("No commands were logged"));
     assert!(empty.contains("set up for agents: NOT set up"));
     assert!(empty.contains("son is not set up for any agent"));
@@ -1332,7 +1486,7 @@ fn stats_show_the_store_and_how_son_is_used() {
 
     let out = sb.ok("alpha", &["stats"]).stdout;
     assert!(out.contains("# son stats (last 30 days)"));
-    assert!(out.contains("4 nodes in 2 projects"), "{out}");
+    assert!(out.contains("4 nodes in 2 collections"), "{out}");
     assert!(out.contains("todo 2") && out.contains("pattern 1") && out.contains("decision 1"));
     assert!(out.contains("todos: 1 open, 1 done, 0 dropped"));
     assert!(out.contains("1 links · 2 tags"));

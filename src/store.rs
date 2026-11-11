@@ -98,10 +98,12 @@ pub struct Node {
     pub body: String,
     #[serde(default)]
     pub status: Option<String>,
-    #[serde(default)]
+    /// The collection this node is in. The Rust and SQL names say "project",
+    /// the older word; everything a user sees says "collection".
+    #[serde(default, rename = "collection_id", alias = "project_id")]
     pub project_id: Option<String>,
-    /// The project's name. Filled in on read; ignored on import.
-    #[serde(default)]
+    /// The collection's name. Filled in on read; ignored on import.
+    #[serde(default, rename = "collection", alias = "project")]
     pub project: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -140,9 +142,9 @@ impl Node {
         short_id(&self.id)
     }
 
-    /// The name of the project this node is in. A project node is its own.
+    /// The name of the collection this node is in. A collection is its own.
     pub fn project_name(&self) -> &str {
-        if self.kind == "project" {
+        if self.kind == "collection" {
             &self.title
         } else {
             self.project.as_deref().unwrap_or("-")
@@ -272,7 +274,7 @@ pub fn get_node(conn: &Connection, id: &str) -> Result<Node> {
 pub fn find_project(conn: &Connection, name: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row(
-            "SELECT id FROM nodes WHERE type = 'project' AND deleted_at IS NULL \
+            "SELECT id FROM nodes WHERE type = 'collection' AND deleted_at IS NULL \
              AND title = ?1 COLLATE NOCASE ORDER BY id LIMIT 1",
             [name],
             |r| r.get(0),
@@ -280,7 +282,7 @@ pub fn find_project(conn: &Connection, name: &str) -> Result<Option<String>> {
         .optional()?)
 }
 
-/// The id of the project called `name`, creating the project node if needed.
+/// The id of the collection called `name`, creating it if needed.
 pub fn ensure_project(conn: &Connection, an: &Analyzer, meta: &Meta, name: &str) -> Result<String> {
     if let Some(id) = find_project(conn, name)? {
         return Ok(id);
@@ -290,7 +292,7 @@ pub fn ensure_project(conn: &Connection, an: &Analyzer, meta: &Meta, name: &str)
         an,
         meta,
         &NewNode {
-            kind: "project",
+            kind: "collection",
             title: name,
             body: "",
             status: None,
@@ -510,7 +512,7 @@ pub fn purge(conn: &Connection, id: &str) -> Result<()> {
         |r| r.get(0),
     )?;
     if children > 0 {
-        bail!("this project still holds {children} node(s); purge or move them first");
+        bail!("this collection still holds {children} node(s); purge or move them first");
     }
     conn.execute("DELETE FROM edges WHERE from_id = ?1 OR to_id = ?1", [id])?;
     conn.execute("DELETE FROM tags WHERE node_id = ?1", [id])?;
@@ -643,7 +645,7 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<ProjectRow>> {
            (SELECT count(*) FROM nodes c WHERE c.project_id = n.id AND c.deleted_at IS NULL), \
            (SELECT count(*) FROM nodes c WHERE c.project_id = n.id AND c.deleted_at IS NULL \
               AND c.type = 'todo' AND c.status = 'open') \
-         {FROM} WHERE n.type = 'project' AND n.deleted_at IS NULL \
+         {FROM} WHERE n.type = 'collection' AND n.deleted_at IS NULL \
          ORDER BY n.title COLLATE NOCASE"
     );
     let mut stmt = conn.prepare(&sql)?;

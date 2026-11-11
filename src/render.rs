@@ -73,7 +73,7 @@ fn tags(node: &Node) -> String {
     node.tags.iter().map(|t| format!(" #{t}")).collect()
 }
 
-/// One line for a node: `` `id` [type] title (project) #tags ``.
+/// One line for a node: `` `id` [type] title (collection) #tags ``.
 pub fn line(node: &Node) -> String {
     let status = match (node.kind.as_str(), node.status.as_deref()) {
         ("todo", Some(status)) => format!(" [{status}]"),
@@ -115,7 +115,7 @@ pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: boo
     let mut facts = vec![
         format!("`{}`", node.short()),
         node.kind.clone(),
-        format!("project: {}", node.project_name()),
+        format!("collection: {}", node.project_name()),
     ];
     if let Some(status) = &node.status {
         facts.push(format!("status: {status}"));
@@ -135,7 +135,7 @@ pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: boo
         (Some(when), None) => format!("verified {}", date(when)),
         (None, _) => "not verified".to_string(),
     };
-    if node.kind != "project" {
+    if node.kind != "collection" {
         println!(
             "evidence: {} · {verified}",
             crate::store::evidence_label(node.evidence.as_deref())
@@ -179,7 +179,7 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
             .map(|h| {
                 let mut value = node_json(&h.node);
                 value["score"] = json!((h.score * 1000.0).round() / 1000.0);
-                value["current_project"] = json!(h.current);
+                value["current_collection"] = json!(h.current);
                 value["match"] = json!(if h.close { "close" } else { "exact" });
                 value["superseded_by"] = json!(h.superseded_by);
                 value
@@ -192,7 +192,7 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
             .collect();
         print_json(&json!({
             "query": terms,
-            "current_project": current_project,
+            "current_collection": current_project,
             "hits": hits,
             "linked": neighbors,
             "also": nodes_json(&result.also),
@@ -201,15 +201,15 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
     }
 
     if result.hits.is_empty() {
-        println!("No matches for \"{terms}\" in any project.");
+        println!("No matches for \"{terms}\" in any collection.");
         return;
     }
-    println!("# Recall: {terms} (current project: {current_project})");
+    println!("# Recall: {terms} (current collection: {current_project})");
     for hit in &result.hits {
         let node = &hit.node;
         println!("\n## `{}` [{}] {}", node.short(), node.kind, node.title);
         let mut facts = vec![format!(
-            "project: {}{}",
+            "collection: {}{}",
             node.project_name(),
             if hit.current { " (current)" } else { "" }
         )];
@@ -248,7 +248,7 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
         }
     }
     if !result.also.is_empty() {
-        println!("\n## Also in these projects");
+        println!("\n## Also in these collections");
         for node in &result.also {
             println!("- {}", line(node));
         }
@@ -300,10 +300,10 @@ pub fn projects(rows: &[ProjectRow], current: &str, json: bool) {
         return;
     }
     if rows.is_empty() {
-        println!("No projects yet. The first `son remember` creates one.");
+        println!("No collections yet. The first `son remember` creates one.");
         return;
     }
-    println!("# Projects");
+    println!("# Collections");
     for row in rows {
         let mark = if row.node.title.eq_ignore_ascii_case(current) {
             " (current)"
@@ -320,7 +320,7 @@ pub fn projects(rows: &[ProjectRow], current: &str, json: bool) {
     }
 }
 
-/// What a project holds, grouped for the start of a session.
+/// What a collection holds, grouped for the start of a session.
 pub struct Context<'a> {
     pub project: &'a Node,
     pub patterns: Vec<Node>,
@@ -333,7 +333,7 @@ pub struct Context<'a> {
 pub fn context(ctx: &Context, json: bool) {
     if json {
         print_json(&json!({
-            "project": node_json(ctx.project),
+            "collection": node_json(ctx.project),
             "patterns": nodes_json(&ctx.patterns),
             "decisions": nodes_json(&ctx.decisions),
             "facts": nodes_json(&ctx.facts),
@@ -401,6 +401,6 @@ pub fn context(ctx: &Context, json: bool) {
         }
     }
     println!(
-        "\n(`son recall <terms>` searches every project; `son show <id>` prints a node in full.)"
+        "\n(`son recall <terms>` searches every collection; `son show <id>` prints a node in full.)"
     );
 }

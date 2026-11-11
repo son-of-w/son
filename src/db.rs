@@ -3,7 +3,7 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -122,6 +122,15 @@ CREATE TABLE refs (
     created_at  TEXT NOT NULL,
     PRIMARY KEY (node_id, kind, value)
 );
+";
+
+/// Version 5: the groups that nodes belong to are called collections, not
+/// projects, because a group can hold household or travel memory as well as
+/// a code repository. The node type is renamed; ids, names and members stay.
+/// The `project_id` column and the `events.project` column keep their names:
+/// they are internal.
+const SCHEMA_V5: &str = "
+UPDATE nodes SET type = 'collection' WHERE type = 'project';
 ";
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
@@ -250,6 +259,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         if version < 4 {
             conn.execute_batch(SCHEMA_V4)?;
         }
+        if version < 5 {
+            conn.execute_batch(SCHEMA_V5)?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     })();
@@ -286,13 +298,28 @@ mod tests {
             conn.pragma_update(None, "user_version", 1).unwrap();
             conn.execute_batch(
                 "INSERT INTO nodes (id, type, title, created_at, updated_at) \
-                 VALUES ('01X', 'note', 'kept', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+                 VALUES ('01P', 'project', 'old-project', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+                 INSERT INTO nodes (id, type, title, project_id, created_at, updated_at) \
+                 VALUES ('01X', 'note', 'kept', '01P', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
                  INSERT INTO nodes_fts (node_id, title, tags, body) VALUES ('01X', 'kept', '', '');",
             )
             .unwrap();
         }
         let conn = open(&path).unwrap();
         assert_eq!(user_version(&conn).unwrap(), SCHEMA_VERSION);
+        // A project of an older database is now a collection, with its members.
+        let kept = crate::store::get_node(&conn, "01X").unwrap();
+        assert_eq!(kept.project.as_deref(), Some("old-project"));
+        assert_eq!(
+            crate::store::get_node(&conn, "01P").unwrap().kind,
+            "collection"
+        );
+        assert_eq!(
+            crate::store::find_project(&conn, "old-project")
+                .unwrap()
+                .as_deref(),
+            Some("01P")
+        );
         let title: String = conn
             .query_row("SELECT title FROM nodes WHERE id = '01X'", [], |r| r.get(0))
             .unwrap();

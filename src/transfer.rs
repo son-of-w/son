@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-pub const DUMP_VERSION: u32 = 1;
+/// Version 2 says "collection" where version 1 said "project": the node
+/// type, and the fields `collection_id` and `collection`. Version 1 files
+/// are still read.
+pub const DUMP_VERSION: u32 = 2;
 
 fn local() -> String {
     "local".to_string()
@@ -42,12 +45,31 @@ pub struct Dump {
     pub synonyms: Vec<SynonymRow>,
 }
 
-/// Everything, or one project. Dropped nodes are included so a backup can
+impl Dump {
+    /// Bring a file of an older version to the current form.
+    pub fn upgrade(&mut self) -> Result<()> {
+        if self.version == 0 || self.version > DUMP_VERSION {
+            bail!(
+                "this file is export version {}, but this son reads versions 1 to {DUMP_VERSION}",
+                self.version
+            );
+        }
+        for node in &mut self.nodes {
+            if node.kind == "project" {
+                node.kind = "collection".to_string();
+            }
+        }
+        self.version = DUMP_VERSION;
+        Ok(())
+    }
+}
+
+/// Everything, or one collection. Dropped nodes are included so a backup can
 /// still restore them.
 pub fn export(conn: &Connection, project_id: Option<&str>) -> Result<Dump> {
     let mut nodes = store::list_nodes(conn, project_id, None, true)?;
-    // Projects first, then oldest first (a ULID sorts by creation time).
-    nodes.sort_by(|a, b| (a.kind != "project", &a.id).cmp(&(b.kind != "project", &b.id)));
+    // Collections first, then oldest first (a ULID sorts by creation time).
+    nodes.sort_by(|a, b| (a.kind != "collection", &a.id).cmp(&(b.kind != "collection", &b.id)));
     let ids: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
 
     let mut stmt = conn.prepare(
@@ -84,7 +106,7 @@ pub fn export(conn: &Connection, project_id: Option<&str>) -> Result<Dump> {
     })
 }
 
-/// A readable dump: one section per project, live nodes only.
+/// A readable dump: one section per collection, live nodes only.
 pub fn markdown(dump: &Dump) -> String {
     let mut out = String::new();
     let titles: HashMap<&str, &Node> = dump.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -93,9 +115,9 @@ pub fn markdown(dump: &Dump) -> String {
     for project in dump
         .nodes
         .iter()
-        .filter(|n| n.kind == "project" && n.deleted_at.is_none())
+        .filter(|n| n.kind == "collection" && n.deleted_at.is_none())
     {
-        let _ = writeln!(out, "\n## Project: {}", project.title);
+        let _ = writeln!(out, "\n## Collection: {}", project.title);
         if !project.body.trim().is_empty() {
             let _ = writeln!(out, "\n{}", project.body.trim());
         }
@@ -141,21 +163,19 @@ pub struct ImportStats {
     pub added: usize,
     pub updated: usize,
     pub unchanged: usize,
-    /// Projects in the file that matched a local project of the same name.
-    pub merged_projects: usize,
+    /// Collections in the file that matched a local collection of the same name.
+    pub merged_collections: usize,
     pub edges: usize,
     pub synonyms: usize,
 }
 
 /// Load a dump. A node that is already here is replaced only when the
-/// incoming copy is newer. A project in the file with the same name as a
-/// local project is merged into the local one.
+/// incoming copy is newer. A collection in the file with the same name as a
+/// local collection is merged into the local one. Call [`Dump::upgrade`]
+/// first.
 pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportStats> {
     if dump.version != DUMP_VERSION {
-        bail!(
-            "this file is export version {}, but this son reads version {DUMP_VERSION}",
-            dump.version
-        );
+        bail!("upgrade the export before importing it");
     }
     store::write(conn, || {
         // Rows may arrive before the rows they point at.
@@ -166,7 +186,7 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
         for node in dump
             .nodes
             .iter()
-            .filter(|n| n.kind == "project" && n.deleted_at.is_none())
+            .filter(|n| n.kind == "collection" && n.deleted_at.is_none())
         {
             if stored_updated_at(conn, &node.id)?.is_some() {
                 continue;
@@ -179,7 +199,7 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
 
         for node in &dump.nodes {
             if remap.contains_key(node.id.as_str()) {
-                stats.merged_projects += 1;
+                stats.merged_collections += 1;
                 continue;
             }
             match stored_updated_at(conn, &node.id)? {
