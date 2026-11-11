@@ -52,7 +52,33 @@ jobs:
           shasum -a 256 *.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      # Safe to run again at any point: each part does nothing if it is
+      # already done, and each is tried up to four times, because GitHub's
+      # own services sometimes fail for a moment.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$TAG" dist/* --title "son $TAG" --generate-notes --verify-tag
+          GH_REPO: ${{ github.repository }}
+        run: |
+          retry() {
+            attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge 4 ]; then
+                echo "gave up after $attempt attempts: $*" >&2
+                return 1
+              fi
+              echo "attempt $attempt failed; trying again in $((attempt * 15))s: $*" >&2
+              sleep $((attempt * 15))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # A draft, so nothing is public until every file is uploaded.
+          ensure_release() {
+            gh release view "$TAG" >/dev/null 2>&1 ||
+              gh release create "$TAG" --draft --title "son $TAG" --generate-notes --verify-tag
+          }
+
+          retry ensure_release
+          retry gh release upload "$TAG" dist/* --clobber
+          retry gh release edit "$TAG" --draft=false

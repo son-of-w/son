@@ -65,6 +65,12 @@ So that the central store can be added later without a migration of existing dat
 * Soft deletes (`deleted_at`) act as tombstones, so a delete can be synced.
 * ULIDs are already globally unique, so rows from different machines never collide.
 
+## Agreed v1 additions (not yet implemented)
+
+### Evidence categories
+
+Decision confirmed by William on 2026-11-11 for TODO.md V1-02: provenance will distinguish **user statement** (explicitly stated by the user), **observation** (directly observed by an agent), and **inference** (concluded by an agent). Existing memories remain **unknown** unless explicitly classified; migration must not guess their category. These categories describe how knowledge was learned, not guaranteed accuracy. Who may mark a memory verified remains an open decision in TODO.md.
+
 ## Project Identity
 
 `son` resolves the current project in this order, first match wins:

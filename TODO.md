@@ -26,7 +26,9 @@ Suggested order: concurrency reliability, provenance, duplicate handling, review
 
   Acceptance: migration preserves old data; provenance and verification round-trip through backup export/import; an edit alone never marks a node verified; user statements and agent inferences remain distinguishable. Attribution must describe recorded evidence, not claim automatic truth verification.
 
-  Ask William before implementation: Which evidence categories should v1 expose, and may an agent mark a memory verified based on evidence it checked, or does verification require explicit user confirmation? Suggested starting point: user statement, observation, inference; agent verification allowed only with recorded supporting evidence.
+  Decision (William, 2026-11-11): Use three evidence categories: **user statement**, **observation**, and **inference**. Existing memories remain **unknown** unless explicitly classified. Categories describe how knowledge was learned, not guaranteed accuracy; do not infer a category during migration.
+
+  Remaining question for William: May an agent mark a memory verified based on evidence it checked, or does verification require explicit user confirmation? Suggested starting point: agent verification allowed only with recorded supporting evidence. This verification policy is not yet decided.
 
 - [ ] **V1-03 — Add a memory review and freshness workflow.**
 
