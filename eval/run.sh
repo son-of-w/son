@@ -52,7 +52,7 @@ export PATH="$run/bin:$PATH"
 export SON_DB="$run/son.db"
 case "$scenario" in
   # The coding scenario is a repository of its own, as a real one would be.
-  coding)    collection="tidepool-api"; echo "$collection" > "$run/work/.son-collection"
+  coding)    collection="tidepool-api"; echo "collection = $collection" > "$run/work/.son"
              git -C "$run/work" init -q
              git -C "$run/work" add -A
              git -C "$run/work" -c user.name=eval -c user.email=eval@example.invalid commit -q -m "Start" ;;

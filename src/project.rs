@@ -3,20 +3,36 @@
 //!
 //! Order, first match wins:
 //! 1. the `SON_COLLECTION` environment variable
-//! 2. a `.son-collection` file in the directory or any parent
+//! 2. a `.son` file in the directory or any parent, with the line
+//!    `collection = <name>`
 //! 3. the repo name from the git `origin` remote
 //! 4. the directory name of the git repository root
 //! 5. the name of the directory itself
 //!
 //! 1 and 2 give an agent that does not work in a repository (household or
 //! travel memory, say) a collection that does not depend on where it runs.
-//! A `.son-project` file, the name before collections, is still read.
+//!
+//! `.son` is the one settings file for a folder: `key = value` lines, `#`
+//! starts a comment, and keys this version does not know are left alone, so
+//! later settings can go in the same file. `collection` is the only key
+//! now. The files of earlier versions, `.son-collection` and `.son-project`
+//! (one line: the name), are still read.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub const MARKER: &str = ".son-collection";
-const OLD_MARKER: &str = ".son-project";
+pub const SETTINGS: &str = ".son";
+const OLD_MARKERS: [&str; 2] = [".son-collection", ".son-project"];
+
+/// The value of `key` in the text of a `.son` file.
+pub fn setting(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let line = line.split('#').next()?.trim();
+        let (name, value) = line.split_once('=')?;
+        let value = value.trim().trim_matches('"').trim();
+        (name.trim().eq_ignore_ascii_case(key) && !value.is_empty()).then(|| value.to_string())
+    })
+}
 pub const ENV: &str = "SON_COLLECTION";
 
 pub fn detect(cwd: &Path) -> String {
@@ -42,11 +58,18 @@ pub fn root(cwd: &Path) -> std::path::PathBuf {
 
 fn from_marker(cwd: &Path) -> Option<String> {
     cwd.ancestors().find_map(|dir| {
-        let text = std::fs::read_to_string(dir.join(MARKER))
-            .or_else(|_| std::fs::read_to_string(dir.join(OLD_MARKER)))
-            .ok()?;
-        let name = text.lines().next()?.trim();
-        (!name.is_empty()).then(|| name.to_string())
+        // A `.son` that names no collection does not hide an older file.
+        if let Some(name) = std::fs::read_to_string(dir.join(SETTINGS))
+            .ok()
+            .and_then(|text| setting(&text, "collection"))
+        {
+            return Some(name);
+        }
+        OLD_MARKERS.iter().find_map(|file| {
+            let text = std::fs::read_to_string(dir.join(file)).ok()?;
+            let name = text.lines().next()?.trim();
+            (!name.is_empty()).then(|| name.to_string())
+        })
     })
 }
 
@@ -110,8 +133,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("son-marker-{}", std::process::id()));
         let nested = root.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(root.join(MARKER), "  my-project \nignored\n").unwrap();
+        std::fs::write(
+            root.join(SETTINGS),
+            "# settings for this folder\nfuture_key = 1\n collection = \"my-project\"  # the name\n",
+        )
+        .unwrap();
         assert_eq!(detect(&nested), "my-project");
+        // A nearer folder wins, and an older one-line file is still read.
+        std::fs::write(
+            root.join("a").join(".son-collection"),
+            " older-name \nignored\n",
+        )
+        .unwrap();
+        assert_eq!(detect(&nested), "older-name");
+        std::fs::write(root.join("a").join(SETTINGS), "collection=nearer\n").unwrap();
+        assert_eq!(detect(&nested), "nearer");
+        assert_eq!(setting("collection =\n", "collection"), None);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

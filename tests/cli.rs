@@ -316,8 +316,8 @@ fn a_marker_file_names_the_collection() {
     let nested = sb.root.join("alpha").join("deep").join("er");
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
-        sb.root.join("alpha").join(".son-collection"),
-        "billing-api\n",
+        sb.root.join("alpha").join(".son"),
+        "collection = billing-api\n",
     )
     .unwrap();
 
@@ -441,7 +441,13 @@ fn a_collection_can_be_chosen_without_a_repository() {
         .stderr
         .contains("no collection named 'nope' (see `son collections`)"));
 
-    // The older marker file name is still read.
+    // The marker files of earlier versions are still read.
+    std::fs::create_dir_all(sb.root.join("alpha/sub")).unwrap();
+    std::fs::write(sb.root.join("alpha/sub/.son-collection"), "older-name\n").unwrap();
+    assert!(sb
+        .ok("alpha/sub", &["remember", "note", "From a 0.1.5 marker"])
+        .stdout
+        .contains("(older-name)"));
     std::fs::write(sb.root.join("beta").join(".son-project"), "legacy-name\n").unwrap();
     assert!(sb
         .ok("beta", &["remember", "note", "From an old marker"])
