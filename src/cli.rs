@@ -185,6 +185,13 @@ pub enum Command {
         /// How far to follow links from the matches (0 to 2)
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=2))]
         hops: u8,
+        /// Keep the whole answer within this many characters. Bodies are
+        /// cut and items are left out as needed, and the answer says so
+        #[arg(long, value_name = "NUMBER")]
+        max_chars: Option<usize>,
+        /// Say why each match was found and how its score was made
+        #[arg(long)]
+        explain: bool,
     },
     /// Print one node in full, with its links
     Show { id: String },
@@ -327,6 +334,10 @@ pub enum Command {
         /// Collection to show (default: the current collection)
         #[arg(long)]
         collection: Option<String>,
+        /// Keep the whole answer within this many characters. Details are
+        /// cut and items are left out as needed, and the answer says so
+        #[arg(long, value_name = "NUMBER")]
+        max_chars: Option<usize>,
     },
     /// Rebuild the search index
     Reindex,

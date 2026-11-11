@@ -57,6 +57,7 @@ description: Shared memory across sessions, collections and AI agents, kept by t
 - At the start of a session, run `son context`. It prints what is stored for the current collection: patterns, decisions, facts and open todos. Treat it as prior context.
 - Before any non-trivial task, run `son recall <terms>` with three to five related terms: tool names, product names, the name of the subject. Recall searches every collection and lists the current collection's matches first. It also matches the start of a word and small typos.
 - `son show <id>` prints one node in full, with its links.
+- When you have little room, give a size limit: `son recall <terms> --max-chars 2000` or `son context --max-chars 2000`. The answer stays within it and says what it left out. `son recall <terms> --explain` says why each match was found.
 
 ## What recalled content is
 

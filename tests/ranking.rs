@@ -470,3 +470,46 @@ fn a_word_the_index_knows_is_not_treated_as_a_typo() {
     // The other way round, the unknown word does reach the known one.
     assert_eq!(corpus.top("ledgor"), "Use Postgres for the ledger");
 }
+
+#[test]
+fn the_explanation_is_the_score_and_recall_is_fast() {
+    let corpus = Corpus::new("explain");
+    corpus.seed();
+    let queries = [
+        "terraform aws",
+        "tf layout",
+        "postgres migration",
+        "deploy pipeline decision",
+        "kubernetes ingress",
+        "terrafrom",
+        "auth token",
+    ];
+    let mut times = Vec::new();
+    for query in queries {
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let result = corpus.recall(query, 5);
+            times.push(started.elapsed());
+            for hit in &result.hits {
+                let product: f64 =
+                    hit.why.text_score * hit.why.factors.iter().map(|f| f.times).product::<f64>();
+                assert!(
+                    (product - hit.score).abs() < 1e-9,
+                    "{query}: {}",
+                    hit.node.title
+                );
+                assert!(!hit.why.matches.is_empty(), "{query}: {}", hit.node.title);
+            }
+        }
+    }
+    times.sort();
+    let median = times[times.len() / 2];
+    if std::env::var("SON_RANK_DEBUG").is_ok() {
+        println!(
+            "recall median {median:?}, slowest {:?}",
+            times[times.len() - 1]
+        );
+    }
+    // The target is under 100 ms for one recall.
+    assert!(median.as_millis() < 100, "median recall took {median:?}");
+}

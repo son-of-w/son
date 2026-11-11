@@ -224,7 +224,16 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             collection: project,
             limit,
             hops,
-        } => app.recall(&query.join(" "), kind, project.as_deref(), limit, hops),
+            max_chars,
+            explain,
+        } => app.recall(
+            &query.join(" "),
+            kind,
+            project.as_deref(),
+            limit,
+            hops,
+            &render::Budget { max_chars, explain },
+        ),
         Command::Show { id } => app.show(&id),
         Command::Edit {
             id,
@@ -324,7 +333,8 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Import { file } => app.import(&file),
         Command::Context {
             collection: project,
-        } => app.context(project.as_deref()),
+            max_chars,
+        } => app.context(project.as_deref(), max_chars),
         Command::List {
             collection: project,
             kind,
@@ -782,6 +792,7 @@ impl App {
         project: Option<&str>,
         limit: usize,
         hops: u8,
+        budget: &render::Budget,
     ) -> Result<()> {
         let name = project_name(project)?;
         self.note(|draft| {
@@ -812,7 +823,10 @@ impl App {
             draft.results = Some(result.hits.len() as i64);
             draft.close = Some(result.hits.iter().filter(|hit| hit.close).count() as i64);
         });
-        render::recall(terms, &name, &result, self.json);
+        print!(
+            "{}",
+            render::recall(terms, &name, &result, self.json, budget)?
+        );
         Ok(())
     }
 
@@ -1403,16 +1417,22 @@ impl App {
         Ok(())
     }
 
-    fn context(&self, project: Option<&str>) -> Result<()> {
+    fn context(&self, project: Option<&str>, max_chars: Option<usize>) -> Result<()> {
         let name = project_name(project)?;
         self.note(|draft| draft.project = Some(name.clone()));
         let Some(project_id) = store::find_project(&self.conn, &name)? else {
-            if self.json {
-                render::print_json(&json!({ "collection": null, "name": name }));
+            let text = if self.json {
+                render::json_text(
+                    &json!({ "collection": null, "name": name }),
+                    max_chars.is_some(),
+                )
             } else {
-                println!("# Context: {name}\n\nNothing is stored for this collection yet.");
-                println!("`son recall <terms>` still searches every other collection.");
-            }
+                format!(
+                    "# Context: {name}\n\nNothing is stored for this collection yet.\n\
+                     `son recall <terms>` still searches every other collection.\n"
+                )
+            };
+            print!("{}", render::within(text, max_chars)?);
             return Ok(());
         };
         let project = store::get_node(&self.conn, &project_id)?;
@@ -1435,7 +1455,7 @@ impl App {
         todos.retain(|t| t.status.as_deref() == Some("open"));
         todos.sort_by(|a, b| a.id.cmp(&b.id));
 
-        render::context(
+        let text = render::context(
             &ProjectContext {
                 project: &project,
                 patterns: of_kind("pattern", CONTEXT_SECTION_LIMIT)?,
@@ -1445,7 +1465,9 @@ impl App {
                 notes: of_kind("note", CONTEXT_NOTES_LIMIT)?,
             },
             self.json,
-        );
+            max_chars,
+        )?;
+        print!("{text}");
         Ok(())
     }
 }

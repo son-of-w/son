@@ -97,6 +97,8 @@ son init --yes
 - **Collections organize; they do not restrict.** Every agent that uses the database can read every collection. A collection is not a security boundary.
 - **Search uses no model.** Text is split (including `camelCase` and `snake_case`), stop words are removed, words are stemmed, and synonyms such as `tf` → `terraform` are applied to the query. Ranking is BM25 with adjustments for title and tag matches, node type, recency and superseded decisions.
 - **Near misses still match.** When the exact words find too few nodes, recall also takes the start of a word (`terra` finds `terraform`) and typos (`terrafrom` finds `terraform`). These are marked `close match` and listed after exact matches.
+- **An answer can be given a size limit.** `son recall ... --max-chars <number>` and `son context --max-chars <number>` keep the whole answer within that many characters: matches, linked nodes, the other nodes of the collections, and with `--json` the whole JSON text. A character is one Unicode code point, and line ends count. To fit, `son` leaves out the extra lists first, then cuts bodies, then lists one line for each match, then fewer matches, then ids only. The answer says what was left out (a last line in markdown; `truncated`, `omitted` and `body_cut` in JSON, which is printed on one line), and every id that is shown works with `son show <id>`. The limit is never passed: if not even the ids fit, the command fails and prints nothing. Without the flag nothing changes: no limit on the whole answer, and each body in a recall is cut at 800 characters as before. `son export` is never cut.
+- **Recall can say why.** `son recall ... --explain` adds to each match the query words it met and where (`"tf" in title as "terraform" (synonym)`, and `prefix` or `typo` for close matches), and its score as a product: the text match, then each adjustment that was applied (recency, query words in title and tags, type, type named in the query, superseded, closed todo). It says when a match is listed first because it is in the current collection, and why linked nodes are there. The explanation is recorded by the ranking code as it runs, and `--explain` does not change the order.
 - **Links connect nodes.** `son link <from> <relation> <to>` with `relates_to`, `supersedes`, `depends_on`, `derived_from` or `belongs_to`. Recall follows links one hop (or two) from its matches. A superseded decision is kept and ranked lower.
 - **Every node can say where it came from.** `--evidence` records how it was learned: `user-statement`, `observation` or `inference`; without it the node is "unknown". `--ref <kind>:<value>` points at the evidence (`file`, `url`, `conversation`, `user`, `other`); `son` stores the pointer and never opens it. `son verify <id> --checked "<what was checked>"` records an explicit check, with its own date. An edit never marks a node verified. These fields describe recorded evidence; `son` does not test whether a node is true.
 - **Duplicates are found before they are saved, and merged only on request.** `son remember <type> "<title>" --check` (and `son todo add "<title>" --check`) saves nothing: it lists stored nodes that may say the same thing, with the reason (same title, shared title words, shared body words). It reads only: no node, no collection, no log entry, and no database if there is none yet. `son merge <source> <survivor>` joins two nodes of the same type: the survivor gets the tags, the evidence references and the links of both; the source is dropped and points to the survivor, so its old id still leads somewhere. When the two bodies differ, you must give the merged text with `--body`; `son` never picks one or joins them. A merge across collections needs `--cross-collection` and keeps the survivor's collection. `son undo <survivor>` reverses a merge. Alike words are a hint only: nothing is merged automatically.
@@ -113,6 +115,7 @@ son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b
                               [--key <text>]               a repeat with the same key saves nothing new
 son merge <source> <survivor> [--body <text>|-] [--title <text>] [--cross-collection]
 son recall <terms...> [--type <type>] [--collection <name>] [--limit 5] [--hops 1]
+                      [--max-chars <number>] [--explain]
 son show <id>
 son edit <id> [--title] [--body] [--type] [--status] [--collection] [--tag] [--evidence] [--ref] [--unref]
 son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
@@ -126,7 +129,7 @@ son todo done <id>
 son link <from> <relation> <to>
 son unlink <from> <relation> <to>
 son collections
-son context [--collection <name>]          what a collection holds, for the start of a session
+son context [--collection <name>] [--max-chars <number>]   what a collection holds, for the start of a session
 son synonym add <term> <canonical> | list | remove <term>
 son export [--collection <name>]           markdown; add --json for the portable format
 son import <file|->                        load a JSON export

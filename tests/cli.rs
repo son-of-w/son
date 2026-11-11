@@ -2018,6 +2018,271 @@ fn a_write_with_a_key_happens_once() {
 }
 
 #[test]
+fn max_chars_bounds_the_whole_answer() {
+    let sb = Sandbox::new("budget");
+    // Long bodies in several scripts, and many links.
+    let long = "Überprüfung der Lagerung 🚀 配置を確認する — ".repeat(60);
+    let hub = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "pattern",
+                "Storage layout for the cluster",
+                "--body",
+                &long,
+            ],
+        )
+        .id();
+    for n in 0..12 {
+        sb.ok(
+            "alpha",
+            &[
+                "remember",
+                "decision",
+                &format!("Storage decision number {n}"),
+                "--body",
+                &long,
+                "--link",
+                &format!("{hub}:relates_to"),
+            ],
+        );
+    }
+    for n in 0..6 {
+        sb.ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                &format!("Cluster fact {n}"),
+                "--body",
+                &long,
+            ],
+        );
+        sb.ok("alpha", &["todo", "add", &format!("Cluster todo {n}")]);
+    }
+    let count = |text: &str| text.chars().count();
+
+    // Without the flag the answer is as before, and here it is long.
+    let full = sb.ok("alpha", &["recall", "storage", "layout"]).stdout;
+    assert!(count(&full) > 3000 && !full.contains("shortened"));
+    let full_json = sb
+        .ok("alpha", &["--json", "recall", "storage", "layout"])
+        .stdout;
+    assert!(full_json.contains("\n  ") && !full_json.contains("truncated"));
+    assert!(count(&full_json) > 20000);
+
+    for max in [20000, 4000, 1500, 600, 250, 120, 60] {
+        let limit = max.to_string();
+        for command in [vec!["recall", "storage", "layout"], vec!["context"]] {
+            let mut args = command.clone();
+            args.extend(["--max-chars", &limit]);
+            let text = sb.ok("alpha", &args).stdout;
+            assert!(
+                count(&text) <= max,
+                "{args:?}: {} > {max}\n{text}",
+                count(&text)
+            );
+            if max <= 1500 {
+                assert!(
+                    text.contains("shortened to fit --max-chars") || text.contains("(cut"),
+                    "{args:?} does not say it was cut: {text}"
+                );
+            }
+            if command[0] == "recall" || max >= 250 {
+                assert!(text.contains('`'), "{args:?} lost its ids: {text}");
+                assert!(max > 1500 || text.contains("son show") || text.contains("son list"));
+            }
+            let mut json_args = vec!["--json"];
+            json_args.extend(args.iter());
+            let out = sb.ok("alpha", &json_args);
+            assert!(
+                count(&out.stdout) <= max,
+                "{json_args:?}: {} > {max}",
+                count(&out.stdout)
+            );
+            let value = out.json();
+            if max <= 1500 {
+                assert_eq!(value["truncated"], true, "{json_args:?}: {value}");
+            }
+            if command[0] == "recall" {
+                assert!(value["hits"][0]["short_id"].is_string(), "{value}");
+            }
+        }
+    }
+    // A middle budget keeps the best match first and cuts its body cleanly.
+    let value = sb
+        .ok(
+            "alpha",
+            &[
+                "--json",
+                "recall",
+                "storage",
+                "layout",
+                "--max-chars",
+                "4000",
+            ],
+        )
+        .json();
+    assert_eq!(value["hits"][0]["short_id"], hub.as_str());
+    assert_eq!(value["hits"][0]["body_cut"], true);
+    assert!(value["omitted"]["bodies_cut"].as_bool().unwrap());
+
+    // A budget that not even the ids fit in is an error, not a longer answer.
+    for args in [
+        vec!["recall", "storage", "--max-chars", "5"],
+        vec!["context", "--max-chars", "5"],
+        vec!["--json", "recall", "storage", "--max-chars", "10"],
+        vec!["--json", "context", "--max-chars", "10"],
+        vec!["recall", "nothing-like-this", "--max-chars", "10"],
+    ] {
+        let out = sb.son("alpha", &args);
+        assert!(!out.ok && out.stdout.is_empty(), "{args:?}");
+        assert!(out.stderr.contains("is too small"), "{}", out.stderr);
+    }
+    let (_, error) = json_error(&sb, "alpha", &["recall", "storage", "--max-chars", "10"]);
+    assert_eq!(error["code"], "invalid_argument");
+    // A small answer fits as it is.
+    let small = sb
+        .ok(
+            "beta",
+            &["recall", "nothing-like-this", "--max-chars", "200"],
+        )
+        .stdout;
+    assert!(small.starts_with("No matches"));
+    // Export is never cut.
+    assert!(count(&sb.ok("alpha", &["export", "--json"]).stdout) > 50000);
+}
+
+#[test]
+fn explain_says_why_without_changing_the_order() {
+    let sb = Sandbox::new("explain");
+    sb.ok(
+        "alpha",
+        &[
+            "remember",
+            "pattern",
+            "Terraform module layout",
+            "--body",
+            "One module per service.",
+            "--tag",
+            "infra",
+        ],
+    );
+    sb.ok(
+        "alpha",
+        &[
+            "remember",
+            "note",
+            "Meeting notes",
+            "--body",
+            "We talked about terraform state.",
+        ],
+    );
+    sb.ok(
+        "beta",
+        &[
+            "remember",
+            "decision",
+            "Use Terraform for all infrastructure",
+        ],
+    );
+    let old = sb
+        .ok(
+            "beta",
+            &["remember", "decision", "Use Pulumi for all infrastructure"],
+        )
+        .id();
+    let newer = sb
+        .ok(
+            "beta",
+            &["remember", "decision", "Infrastructure tool choice"],
+        )
+        .id();
+    sb.ok("beta", &["link", &newer, "supersedes", &old]);
+
+    for query in [
+        vec!["tf", "layout"],
+        vec!["terrafrom"],
+        vec!["terra"],
+        vec!["infrastructure", "decision"],
+    ] {
+        let mut plain = vec!["--json", "recall"];
+        plain.extend(query.iter());
+        let mut explained = plain.clone();
+        explained.push("--explain");
+        let a = sb.ok("alpha", &plain).json();
+        let b = sb.ok("alpha", &explained).json();
+        let ids = |v: &Value| -> Vec<String> {
+            v["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h["short_id"].to_string())
+                .collect()
+        };
+        assert_eq!(ids(&a), ids(&b), "{query:?}");
+        assert!(a["hits"][0].get("why").is_none());
+        for hit in b["hits"].as_array().unwrap() {
+            // The explanation is the computation: it gives the score.
+            let why = &hit["why"];
+            let product: f64 = why["factors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["times"].as_f64().unwrap())
+                .product::<f64>()
+                * why["text_score"].as_f64().unwrap();
+            assert!(
+                (product - hit["score"].as_f64().unwrap()).abs() < 0.01,
+                "{hit}"
+            );
+            assert!(!why["matches"].as_array().unwrap().is_empty(), "{hit}");
+        }
+    }
+
+    let text = sb
+        .ok("alpha", &["recall", "tf", "layout", "--explain"])
+        .stdout;
+    assert!(
+        text.contains(
+            "why: matched \"tf\" in title as \"terraform\" (synonym); \"layout\" in title"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("× type 1.30")
+            && text.contains("listed first because it is in the current collection"),
+        "{text}"
+    );
+    assert!(text.contains("why: score "));
+    let typo = sb.ok("alpha", &["recall", "terrafrom", "--explain"]).stdout;
+    assert!(
+        typo.contains("as \"terraform\" (typo)") && typo.contains("close match"),
+        "{typo}"
+    );
+    let prefix = sb.ok("alpha", &["recall", "terra", "--explain"]).stdout;
+    assert!(prefix.contains("as \"terraform\" (prefix)"), "{prefix}");
+    let hint = sb
+        .ok("alpha", &["recall", "pulumi", "decision", "--explain"])
+        .stdout;
+    assert!(
+        hint.contains("× type named in the query 2.50") && hint.contains("× superseded 0.40"),
+        "{hint}"
+    );
+    let linked = sb.ok("alpha", &["recall", "pulumi", "--explain"]).stdout;
+    assert!(
+        linked.contains("why: each is linked to the match"),
+        "{linked}"
+    );
+    // Without the flag there is no explanation in the answer.
+    assert!(!sb
+        .ok("alpha", &["recall", "tf", "layout"])
+        .stdout
+        .contains("why:"));
+}
+
+#[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");

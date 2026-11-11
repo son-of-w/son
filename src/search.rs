@@ -11,6 +11,7 @@ use crate::analyze::{edit_distance, Analyzer, Query};
 use crate::store::{self, Node, COLS, NCOLS};
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection};
+use serde::Serialize;
 use std::collections::HashSet;
 
 /// BM25 column weights: title counts most, then tags, then body.
@@ -60,6 +61,40 @@ pub struct Hit {
     pub close: bool,
     /// Short id of the node that supersedes this one.
     pub superseded_by: Option<String>,
+    /// Why the node matched and how its score was made. Filled in by the
+    /// ranking itself, so it always agrees with the order.
+    pub why: Why,
+}
+
+/// One query word found in a node.
+#[derive(Debug, Clone, Serialize)]
+pub struct WordMatch {
+    /// The query word, after stemming.
+    pub word: String,
+    /// The stored word it met.
+    pub found: String,
+    /// `exact`, `synonym`, `prefix` or `typo`.
+    pub how: &'static str,
+    /// `title`, `tags` or `body`.
+    #[serde(rename = "in")]
+    pub field: &'static str,
+}
+
+/// One multiplication applied to the text score.
+#[derive(Debug, Clone, Serialize)]
+pub struct Factor {
+    pub name: &'static str,
+    pub times: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Why {
+    pub matches: Vec<WordMatch>,
+    /// The text score (BM25; title counts 10, tags 5, body 1).
+    pub text_score: f64,
+    /// Each adjustment, in the order it was applied. The final score is
+    /// `text_score` times all of them.
+    pub factors: Vec<Factor>,
 }
 
 pub struct Neighbor {
@@ -80,15 +115,57 @@ pub struct Recall {
 /// One word of the query as the search sees it: the terms that stand for
 /// it, and for a loose search a prefix as well.
 struct Matcher {
+    /// The query word itself, stemmed.
+    stem: String,
+    /// The stem and its synonyms.
     terms: Vec<String>,
+    /// Stored words a typo away from the stem (loose search only).
+    fuzzy: Vec<String>,
     prefix: Option<String>,
 }
 
 impl Matcher {
-    fn matches(&self, token: &str) -> bool {
-        self.terms.iter().any(|term| term == token)
-            || self.prefix.as_deref().is_some_and(|p| token.starts_with(p))
+    /// How this query word meets a stored word, if it does.
+    fn how(&self, token: &str) -> Option<&'static str> {
+        if token == self.stem {
+            Some("exact")
+        } else if self.terms.iter().any(|term| term == token) {
+            Some("synonym")
+        } else if self.fuzzy.iter().any(|term| term == token) {
+            Some("typo")
+        } else if self.prefix.as_deref().is_some_and(|p| token.starts_with(p)) {
+            Some("prefix")
+        } else {
+            None
+        }
     }
+
+    fn matches(&self, token: &str) -> bool {
+        self.how(token).is_some()
+    }
+}
+
+/// Where each query word was found in a node: the first place of title,
+/// tags, body.
+fn word_matches(matchers: &[Matcher], fields: &[(&'static str, &[String])]) -> Vec<WordMatch> {
+    let mut found = Vec::new();
+    for matcher in matchers {
+        for (field, tokens) in fields {
+            let hit = tokens
+                .iter()
+                .find_map(|token| matcher.how(token).map(|how| (token, how)));
+            if let Some((token, how)) = hit {
+                found.push(WordMatch {
+                    word: matcher.stem.clone(),
+                    found: token.clone(),
+                    how,
+                    field,
+                });
+                break;
+            }
+        }
+    }
+    found
 }
 
 /// The FTS5 MATCH expression for a set of matchers. Terms hold only letters
@@ -96,7 +173,7 @@ impl Matcher {
 fn match_expression(matchers: &[Matcher]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for matcher in matchers {
-        for term in &matcher.terms {
+        for term in matcher.terms.iter().chain(&matcher.fuzzy) {
             parts.push(format!("\"{term}\""));
         }
         if let Some(prefix) = &matcher.prefix {
@@ -120,7 +197,9 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
         .groups
         .iter()
         .map(|group| Matcher {
+            stem: group.stem.clone(),
             terms: group.terms.clone(),
+            fuzzy: Vec::new(),
             prefix: None,
         })
         .collect();
@@ -132,11 +211,14 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
     if hits.len() < limit {
         let mut loose = Vec::with_capacity(query.groups.len());
         for group in &query.groups {
-            let mut terms = group.terms.clone();
-            terms.extend(fuzzy_terms(conn, &group.stem)?);
             let prefix =
                 (group.stem.chars().count() >= MIN_PREFIX_CHARS).then(|| group.stem.clone());
-            loose.push(Matcher { terms, prefix });
+            loose.push(Matcher {
+                stem: group.stem.clone(),
+                terms: group.terms.clone(),
+                fuzzy: fuzzy_terms(conn, &group.stem)?,
+                prefix,
+            });
         }
         if match_expression(&loose) != match_expression(&exact) {
             let found: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
@@ -190,7 +272,8 @@ fn ranked(
          WHERE nodes_fts MATCH ?1 AND n.deleted_at IS NULL \
            AND (?2 IS NULL OR n.type = ?2) \
            AND (?3 IS NULL OR n.project_id = ?3 OR n.id = ?3) \
-         ORDER BY 17 LIMIT ?4"
+         ORDER BY {} LIMIT ?4",
+        NCOLS + 1
     );
     // Take more candidates than asked for: the adjustments below reorder them.
     let candidates = (opts.limit.max(1) * 10).max(50) as i64;
@@ -218,25 +301,54 @@ fn ranked(
     for (node, bm25, age_days, superseded) in rows {
         // FTS5 gives better matches a more negative bm25.
         let mut score = -bm25;
-        let age = age_days.unwrap_or(0.0).max(0.0);
-        score *= 1.0 + RECENCY_BOOST * 0.5f64.powf(age / RECENCY_HALF_LIFE_DAYS);
-        score *= 1.0
-            + TITLE_COVERAGE_BOOST * coverage(matchers, &an.tokens(&node.title))
-            + TAG_COVERAGE_BOOST * coverage(matchers, &an.tokens(&node.tags.join(" ")));
-        score *= match node.kind.as_str() {
-            "pattern" => PATTERN_PRIOR,
-            "decision" => DECISION_PRIOR,
-            _ => 1.0,
+        let mut why = Why {
+            text_score: score,
+            ..Why::default()
         };
+        // Every adjustment goes through here, so the explanation cannot
+        // differ from what was done.
+        let mut apply = |name: &'static str, times: f64| {
+            if times != 1.0 {
+                score *= times;
+                why.factors.push(Factor { name, times });
+            }
+        };
+        let (title, tags, body) = (
+            an.tokens(&node.title),
+            an.tokens(&node.tags.join(" ")),
+            an.tokens(&node.body),
+        );
+        let age = age_days.unwrap_or(0.0).max(0.0);
+        apply(
+            "recency",
+            1.0 + RECENCY_BOOST * 0.5f64.powf(age / RECENCY_HALF_LIFE_DAYS),
+        );
+        apply(
+            "query words in title and tags",
+            1.0 + TITLE_COVERAGE_BOOST * coverage(matchers, &title)
+                + TAG_COVERAGE_BOOST * coverage(matchers, &tags),
+        );
+        apply(
+            "type",
+            match node.kind.as_str() {
+                "pattern" => PATTERN_PRIOR,
+                "decision" => DECISION_PRIOR,
+                _ => 1.0,
+            },
+        );
         if opts.kind.is_none() && query.type_hint == Some(node.kind.as_str()) {
-            score *= TYPE_HINT_BOOST;
+            apply("type named in the query", TYPE_HINT_BOOST);
         }
         if superseded {
-            score *= SUPERSEDED_PENALTY;
+            apply("superseded", SUPERSEDED_PENALTY);
         }
         if node.kind == "todo" && node.status.as_deref() != Some("open") {
-            score *= CLOSED_TODO_PENALTY;
+            apply("closed todo", CLOSED_TODO_PENALTY);
         }
+        why.matches = word_matches(
+            matchers,
+            &[("title", &title), ("tags", &tags), ("body", &body)],
+        );
         let current = opts.current_project.is_some_and(|current| {
             node.project_id.as_deref() == Some(current) || node.id == current
         });
@@ -251,6 +363,7 @@ fn ranked(
             current,
             close,
             superseded_by,
+            why,
         });
     }
     Ok(hits)
