@@ -1,6 +1,7 @@
 //! Reading and writing nodes, tags, edges and synonyms.
 
 use crate::analyze::Analyzer;
+use crate::error::coded;
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -210,7 +211,10 @@ impl Meta {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         Self {
             source: var("SON_SOURCE"),
-            author: var("SON_AUTHOR").or_else(|| var("USER")),
+            // USER on macOS and Linux, USERNAME on Windows.
+            author: var("SON_AUTHOR")
+                .or_else(|| var("USER"))
+                .or_else(|| var("USERNAME")),
         }
     }
 }
@@ -248,7 +252,10 @@ pub fn write<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
 pub fn resolve_id(conn: &Connection, input: &str) -> Result<String> {
     let needle = input.trim().trim_matches('`').to_uppercase();
     if needle.len() < 4 || !needle.chars().all(|c| c.is_ascii_alphanumeric()) {
-        bail!("'{input}' is not an id (use the 8-character id that son prints)");
+        return Err(coded(
+            "invalid_argument",
+            format!("'{input}' is not an id (use the 8-character id that son prints)"),
+        ));
     }
     let mut stmt =
         conn.prepare("SELECT id, title FROM nodes WHERE id LIKE '%' || ?1 ORDER BY id LIMIT 6")?;
@@ -256,17 +263,23 @@ pub fn resolve_id(conn: &Connection, input: &str) -> Result<String> {
         .query_map([&needle], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     match hits.as_slice() {
-        [] => bail!("no node has an id ending in '{input}'"),
+        [] => Err(coded(
+            "unknown_id",
+            format!("no node has an id ending in '{input}'"),
+        )),
         [(id, _)] => Ok(id.clone()),
         many => {
             let list: Vec<String> = many
                 .iter()
                 .map(|(id, title)| format!("  {}  {title}", id.to_lowercase()))
                 .collect();
-            bail!(
-                "'{input}' matches more than one node; use more characters:\n{}",
-                list.join("\n")
-            )
+            Err(coded(
+                "ambiguous_id",
+                format!(
+                    "'{input}' matches more than one node; use more characters:\n{}",
+                    list.join("\n")
+                ),
+            ))
         }
     }
 }
@@ -584,6 +597,8 @@ pub fn purge(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM edges WHERE from_id = ?1 OR to_id = ?1", [id])?;
     conn.execute("DELETE FROM tags WHERE node_id = ?1", [id])?;
     conn.execute("DELETE FROM refs WHERE node_id = ?1", [id])?;
+    // A key's stored answer holds the node's text: it goes too.
+    conn.execute("DELETE FROM idempotency WHERE node_id = ?1", [id])?;
     conn.execute("DELETE FROM nodes_fts WHERE node_id = ?1", [id])?;
     conn.execute("DELETE FROM nodes WHERE id = ?1", [id])?;
     Ok(())

@@ -11,8 +11,9 @@
 
 use crate::activity::Page;
 use crate::analyze::Analyzer;
+use crate::error::coded;
 use crate::store::{self, Meta, Node, NOW};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -466,13 +467,19 @@ pub fn undo(
         )?;
     let name = format!("#{target} ({kind})");
     if let Some(by) = undone_by {
-        bail!("{name} was already undone by #{by}");
+        return Err(coded(
+            "conflict",
+            format!("{name} was already undone by #{by}"),
+        ));
     }
     if purged {
-        bail!(
-            "cannot undo {name}: a node it changed was purged, so restoration is unavailable. \
-             Nothing was changed"
-        );
+        return Err(coded(
+            "unavailable",
+            format!(
+                "cannot undo {name}: a node it changed was purged, so restoration is unavailable. \
+                 Nothing was changed"
+            ),
+        ));
     }
 
     let revisions: Vec<(String, Option<Node>, Node)> = conn
@@ -499,10 +506,18 @@ pub fn undo(
 
     // First check everything. Nothing is written until all of it is safe.
     let conflict = |what: String| {
-        anyhow!("cannot undo {name}: {what}. Nothing was changed (see `son history {short}`)")
+        coded(
+            "conflict",
+            format!("cannot undo {name}: {what}. Nothing was changed (see `son history {short}`)"),
+        )
     };
     let unavailable = |what: String| {
-        anyhow!("cannot undo {name}: {what}, so restoration is unavailable. Nothing was changed")
+        coded(
+            "unavailable",
+            format!(
+                "cannot undo {name}: {what}, so restoration is unavailable. Nothing was changed"
+            ),
+        )
     };
     // The nodes that this undo will leave dropped.
     let will_drop: Vec<&str> = revisions

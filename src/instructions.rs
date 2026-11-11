@@ -108,7 +108,8 @@ Say how you learned what you save, so that a later session can judge it:
 - `son history <id>` lists every change to a node; `son undo <id>` reverses the newest one. A wrong edit or drop is not lost: undo it.
 - `son todo list` shows open todos; `son collections` lists collections; `son list` shows recent changes.
 - Relations for `son link`: `relates_to`, `supersedes`, `depends_on`, `derived_from`, `belongs_to`.
-- Add `--json` to any command for structured output. `son --help` lists every command.
+- Add `--json` to any command for structured output. With `--json`, an error is a JSON object on stderr with a stable `code`. `son --help` lists every command.
+- If a write may not have arrived (a timeout, an interrupted command), send it again with the same `--key <text>` on `son remember` or `son todo add`: it is saved once.
 "#;
 
 /// The skill file.

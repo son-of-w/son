@@ -163,6 +163,11 @@ pub enum Command {
         /// Save nothing: only list stored nodes that this may duplicate
         #[arg(long)]
         check: bool,
+        /// A name of your choice for this write. Sending the same write
+        /// again with the same key saves nothing new and gives the first
+        /// answer again; use it when you are not sure a write arrived
+        #[arg(long, value_name = "KEY", conflicts_with = "check")]
+        key: Option<String>,
     },
     /// Search all collections; the current collection's matches come first
     Recall {
@@ -395,6 +400,10 @@ pub enum TodoCommand {
         /// Save nothing: only list stored todos that this may duplicate
         #[arg(long)]
         check: bool,
+        /// A name of your choice for this write; a repeat with the same
+        /// key saves nothing new and gives the first answer again
+        #[arg(long, value_name = "KEY", conflicts_with = "check")]
+        key: Option<String>,
     },
     /// List open todos for the current collection
     List {

@@ -110,6 +110,7 @@ son init [--agent a,b] [--scope global|project] [--yes]   create the database, s
 son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b] [--link <id>:<relation>]
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
                               [--check]                    save nothing; list possible duplicates
+                              [--key <text>]               a repeat with the same key saves nothing new
 son merge <source> <survivor> [--body <text>|-] [--title <text>] [--cross-collection]
 son recall <terms...> [--type <type>] [--collection <name>] [--limit 5] [--hops 1]
 son show <id>
@@ -140,6 +141,37 @@ son stats [--days 30 | --all]
 Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
 
 Set `SON_DB` to use a different database file. Many sessions can use the database at the same time: a session that finds it locked waits for up to 10 seconds, then fails with a message and changes nothing. Set `SON_BUSY_MS` to change that wait (in milliseconds).
+
+### For programs: errors and repeated writes
+
+With `--json`, a command that succeeds writes its result to stdout. A command that fails writes nothing to stdout and one JSON object to stderr, and exits with a status that is not 0 (2 for a mistake in the arguments, 1 for everything else):
+
+```json
+{"error": {"code": "unknown_id", "message": "no node has an id ending in 'qqqqqq'", "retry": null}}
+```
+
+`code` is stable. `message` is for people and can change. `retry` is text when the same command can succeed if it is run again, and `null` when it cannot.
+
+| Code | Meaning |
+| --- | --- |
+| `invalid_argument` | The command line is wrong: unknown command or flag, bad value, something that is not an id |
+| `invalid_request` | The command line is valid, but the request cannot be done as asked (empty title, a node linked to itself, a merge that needs `--body`) |
+| `unknown_id` | No node has that id |
+| `ambiguous_id` | More than one node has that id; give more characters |
+| `unknown_collection` | No collection has that name |
+| `database_busy` | Another session held the database for longer than the wait. Run it again |
+| `database_error` | SQLite reported another error |
+| `unsupported_schema` | The database is from a newer `son`, or a read-only command met an older one |
+| `conflict` | `son undo` found a later change, or the change was already undone. Nothing was changed |
+| `unavailable` | `son undo` needs history that was purged. Nothing was changed |
+| `idempotency_conflict` | The `--key` was already used for a different write. Nothing was saved |
+| `import_failed` | The file is not a `son` export, or is of a version this `son` does not read |
+| `install_failed` | `son init` could not write all files. Its report on stdout is still complete |
+| `io_error` | A file could not be read or written |
+
+Without `--json`, errors are plain text on stderr, as before.
+
+**Repeated writes.** A program that does not know if a write arrived (a timeout, a lost answer) can send it again safely with `--key <text>` on `son remember` and `son todo add`. The first time, the node is saved and the key is stored with it in the same transaction. Sent again with the same key and the same content, nothing new is saved and the first answer is returned again; the activity log shows it as a replay. The same key with different content is refused with `idempotency_conflict`. A key holds for the whole database, across sessions and agents, until the node is purged. A key is not a duplicate check: two writes with two keys save two nodes; use `--check` to look for duplicates.
 
 Do not store secrets. The database is plain text.
 

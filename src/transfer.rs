@@ -50,10 +50,13 @@ impl Dump {
     /// Bring a file of an older version to the current form.
     pub fn upgrade(&mut self) -> Result<()> {
         if self.version == 0 || self.version > DUMP_VERSION {
-            bail!(
-                "this file is export version {}, but this son reads versions 1 to {DUMP_VERSION}",
-                self.version
-            );
+            return Err(crate::error::coded(
+                "import_failed",
+                format!(
+                    "this file is export version {}, but this son reads versions 1 to {DUMP_VERSION}",
+                    self.version
+                ),
+            ));
         }
         for node in &mut self.nodes {
             if node.kind == "project" {

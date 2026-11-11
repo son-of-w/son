@@ -1270,7 +1270,7 @@ fn an_import_is_one_change_that_can_be_undone() {
     sb.ok("alpha", &["import", fixture.to_str().unwrap()]);
     let history = sb.ok("alpha", &["history", "NJECT1"]).stdout;
     assert!(
-        history.contains(" import ") && history.contains("created [note]"),
+        history.contains(" import") && history.contains("created [note]"),
         "{history}"
     );
     assert!(history.contains("(+1 other node(s))"), "{history}");
@@ -1682,6 +1682,339 @@ fn merge_keeps_evidence_and_links_and_can_be_undone() {
         .son("alpha", &["merge", &dup, &keep, "--body", "x"])
         .stderr
         .contains("is dropped"));
+}
+
+/// Run with --json, require failure, and give (exit code, error object).
+/// stdout must be empty and stderr must be one JSON object.
+fn json_error(sb: &Sandbox, dir: &str, args: &[&str]) -> (i32, Value) {
+    let mut full = vec!["--json"];
+    full.extend(args);
+    let output = sb.command(dir, &full).output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!output.status.success(), "{args:?} should fail");
+    assert!(output.stdout.is_empty(), "{args:?} wrote to stdout");
+    let value: Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|_| panic!("stderr of {args:?} is not JSON: {stderr}"));
+    assert!(value["error"]["message"].is_string(), "{value}");
+    (output.status.code().unwrap(), value["error"].clone())
+}
+
+#[test]
+fn json_errors_have_stable_codes_on_stderr() {
+    let sb = Sandbox::new("json-errors");
+    let file = sb.root.join("two.json");
+    std::fs::write(
+        &file,
+        r#"{"version":2,"exported_at":"2026-11-01T00:00:00.000Z","nodes":[
+          {"id":"01JERR000000000000000AZZZZ","type":"collection","title":"twins",
+           "created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-01T00:00:00.000Z"},
+          {"id":"01JERR000000000000000BZZZZ","type":"note","title":"Twin",
+           "collection_id":"01JERR000000000000000AZZZZ",
+           "created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-01T00:00:00.000Z"}]}"#,
+    )
+    .unwrap();
+    sb.ok("alpha", &["import", file.to_str().unwrap()]);
+    let id = sb.ok("alpha", &["remember", "note", "A note"]).id();
+
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["show", "qqqqqq"], "unknown_id"),
+        (vec!["show", "zzzz"], "ambiguous_id"),
+        (vec!["show", "!!"], "invalid_argument"),
+        (vec!["list", "--collection", "nope"], "unknown_collection"),
+        (
+            vec!["recall", "x", "--collection", "nope"],
+            "unknown_collection",
+        ),
+        (vec!["link", &id, "relates_to", &id], "invalid_request"),
+        (vec!["remember", "note", "  "], "invalid_request"),
+        (vec!["undo", "bzzzz", "--op", "1"], "conflict"),
+        (vec!["import", "/no/such/file.json"], "io_error"),
+    ];
+    // `undo --op 1` on the imported note works once; the second is a conflict.
+    sb.ok("alpha", &["undo", "bzzzz", "--op", "1"]);
+    for (args, code) in cases {
+        let (status, error) = json_error(&sb, "alpha", &args);
+        assert_eq!(error["code"], code, "{args:?}: {error}");
+        assert_eq!(status, 1, "{args:?}");
+        assert!(error.get("retry").is_some());
+    }
+
+    // A mistake in the arguments is found before any command runs.
+    for args in [
+        vec!["no-such-command"],
+        vec!["recall"],
+        vec!["remember", "sandwich", "x"],
+        vec!["list", "--limit", "0"],
+    ] {
+        let (status, error) = json_error(&sb, "alpha", &args);
+        assert_eq!(error["code"], "invalid_argument", "{args:?}");
+        assert_eq!(status, 2);
+    }
+    // --help is not an error, with or without --json.
+    assert!(sb
+        .ok("alpha", &["--json", "--help"])
+        .stdout
+        .contains("Usage"));
+
+    // A file that is not a son export.
+    std::fs::write(&file, "not json").unwrap();
+    let (_, error) = json_error(&sb, "alpha", &["import", file.to_str().unwrap()]);
+    assert_eq!(error["code"], "import_failed");
+    std::fs::write(&file, r#"{"version":99,"exported_at":"x","nodes":[]}"#).unwrap();
+    let (_, error) = json_error(&sb, "alpha", &["import", file.to_str().unwrap()]);
+    assert_eq!(error["code"], "import_failed");
+
+    // A locked database: the code says so, and says a repeat can help.
+    let holder = rusqlite::Connection::open(sb.root.join("son.db")).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let output = sb
+        .command("alpha", &["--json", "remember", "note", "Blocked"])
+        .env("SON_BUSY_MS", "200")
+        .output()
+        .unwrap();
+    holder.execute_batch("ROLLBACK").unwrap();
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "database_busy");
+    assert!(error["error"]["retry"].as_str().unwrap().contains("again"));
+
+    // An install that fails in part: the report on stdout is whole and
+    // valid, the error on stderr names what failed.
+    let home = sb.root.join("home");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::write(home.join(".claude/skills"), "a file where a folder must be").unwrap();
+    let output = sb
+        .command(
+            "alpha",
+            &[
+                "--json",
+                "init",
+                "--agent",
+                "claude-code",
+                "--scope",
+                "global",
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["installs"][0]["skill"]["result"], "failed");
+    assert_ne!(report["installs"][0]["rules"]["result"], "failed");
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "install_failed");
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("SKILL.md"));
+
+    // Without --json, errors stay plain text.
+    let plain = sb.son("alpha", &["show", "qqqqqq"]);
+    assert!(
+        plain
+            .stderr
+            .starts_with("error: no node has an id ending in"),
+        "{}",
+        plain.stderr
+    );
+    assert!(!plain.stderr.contains('{'));
+}
+
+#[test]
+fn a_write_with_a_key_happens_once() {
+    let sb = Sandbox::new("idempotent");
+    let args = [
+        "--json",
+        "remember",
+        "fact",
+        "Port is 8443",
+        "--body",
+        "From the config.",
+        "--tag",
+        "net,api",
+        "--key",
+        "write-001",
+    ];
+    let first = sb.ok("alpha", &args).json();
+    // The answer was lost; the caller sends the same write again, from
+    // another session. The first answer comes back and nothing new is saved.
+    let out = sb
+        .command("alpha", &args)
+        .env("SON_SOURCE", "session-2")
+        .output()
+        .unwrap();
+    let again: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(again, first);
+    // The same request in another order of tags is the same request.
+    let reordered = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                " Port is 8443 ",
+                "--body",
+                "From the config.",
+                "--tag",
+                "API, net",
+                "--key",
+                "write-001",
+            ],
+        )
+        .stdout;
+    assert!(
+        reordered.contains(first["short_id"].as_str().unwrap()),
+        "{reordered}"
+    );
+    assert!(
+        reordered.contains("already saved with this key"),
+        "{reordered}"
+    );
+    let facts = sb.ok("alpha", &["--json", "list", "--type", "fact"]).json();
+    assert_eq!(facts["total"], 1);
+    assert_eq!(
+        sb.ok(
+            "alpha",
+            &["--json", "history", first["short_id"].as_str().unwrap()]
+        )
+        .json()["total"],
+        1
+    );
+    // The log shows the repeats for what they were.
+    let log = sb.ok("alpha", &["log", "--command", "remember"]).stdout;
+    assert_eq!(log.matches("replay of key write-001").count(), 2, "{log}");
+
+    // The same key for a different write is refused and saves nothing.
+    for different in [
+        vec![
+            "remember",
+            "fact",
+            "Port is 9000",
+            "--body",
+            "From the config.",
+            "--tag",
+            "net,api",
+            "--key",
+            "write-001",
+        ],
+        vec![
+            "remember",
+            "fact",
+            "Port is 8443",
+            "--body",
+            "Changed.",
+            "--tag",
+            "net,api",
+            "--key",
+            "write-001",
+        ],
+        vec![
+            "remember",
+            "note",
+            "Port is 8443",
+            "--body",
+            "From the config.",
+            "--tag",
+            "net,api",
+            "--key",
+            "write-001",
+        ],
+        vec!["todo", "add", "Port is 8443", "--key", "write-001"],
+    ] {
+        let (_, error) = json_error(&sb, "alpha", &different);
+        assert_eq!(error["code"], "idempotency_conflict", "{different:?}");
+    }
+    // From another directory the collection differs, so it is a different write.
+    let (_, error) = json_error(
+        &sb,
+        "beta",
+        &[
+            "remember",
+            "fact",
+            "Port is 8443",
+            "--body",
+            "From the config.",
+            "--tag",
+            "net,api",
+            "--key",
+            "write-001",
+        ],
+    );
+    assert_eq!(error["code"], "idempotency_conflict");
+    assert_eq!(sb.ok("alpha", &["--json", "list"]).json()["total"], 1);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "collections"])
+            .json()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Many sessions send one write at the same time: one node.
+    let children: Vec<_> = (0..12)
+        .map(|_| {
+            sb.command(
+                "alpha",
+                &[
+                    "--json",
+                    "todo",
+                    "add",
+                    "Rotate the keys",
+                    "--key",
+                    "todo-7",
+                ],
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+        })
+        .collect();
+    let mut ids = Vec::new();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        ids.push(value["id"].as_str().unwrap().to_string());
+    }
+    ids.dedup();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "todo", "list"])
+            .json()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // A key is not a duplicate check, and a check takes no key.
+    sb.ok(
+        "alpha",
+        &["remember", "fact", "Port is 8443", "--key", "write-002"],
+    );
+    assert_eq!(
+        sb.ok("alpha", &["--json", "list", "--type", "fact"]).json()["total"],
+        2
+    );
+    assert!(
+        !sb.son("alpha", &["remember", "fact", "x", "--check", "--key", "k"])
+            .ok
+    );
+    assert!(!sb.son("alpha", &["remember", "fact", "x", "--key", " "]).ok);
+
+    // Purging the node forgets its stored answer; the key is free again.
+    sb.ok(
+        "alpha",
+        &["drop", first["short_id"].as_str().unwrap(), "--purge"],
+    );
+    let fresh = sb.ok("alpha", &args).json();
+    assert_ne!(fresh["id"], first["id"]);
 }
 
 #[test]

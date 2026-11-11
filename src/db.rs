@@ -1,9 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -180,6 +180,24 @@ const SCHEMA_V7: &str = "
 ALTER TABLE nodes ADD COLUMN merged_into TEXT;
 ";
 
+/// Version 8 adds idempotency keys. A caller that is not sure a write
+/// arrived (a lost answer, a timeout) sends it again with the same `--key`.
+/// The row holds what was asked (`request`) and what was answered
+/// (`result`), and is written in the same transaction as the node, so a key
+/// is there if and only if its write happened. Keys are for the whole
+/// database, not for one session.
+const SCHEMA_V8: &str = "
+CREATE TABLE idempotency (
+    key         TEXT PRIMARY KEY,
+    command     TEXT NOT NULL,
+    request     TEXT NOT NULL,
+    node_id     TEXT,
+    result      TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX idempotency_node ON idempotency(node_id);
+";
+
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
@@ -235,10 +253,13 @@ pub fn open_read_only(path: &Path) -> Result<Option<Connection>> {
     match user_version(&conn)? {
         0 => Ok(None),
         SCHEMA_VERSION => Ok(Some(conn)),
-        version => bail!(
-            "the database is schema version {version} and this son uses version {SCHEMA_VERSION}. \
-             A read-only command does not upgrade it; run `son init --db-only` once, then try again"
-        ),
+        version => Err(crate::error::coded(
+            "unsupported_schema",
+            format!(
+                "the database is schema version {version} and this son uses version {SCHEMA_VERSION}. \
+                 A read-only command does not upgrade it; run `son init --db-only` once, then try again"
+            ),
+        )),
     }
 }
 
@@ -306,9 +327,12 @@ fn migrate(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     if version > SCHEMA_VERSION {
-        bail!(
-            "database is schema version {version}, but this son only knows version {SCHEMA_VERSION}; install a newer son"
-        );
+        return Err(crate::error::coded(
+            "unsupported_schema",
+            format!(
+                "database is schema version {version}, but this son only knows version {SCHEMA_VERSION}; install a newer son"
+            ),
+        ));
     }
     // Take the write lock, then look again: another session may have
     // created the schema while this one waited.
@@ -335,6 +359,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         if version < 7 {
             conn.execute_batch(SCHEMA_V7)?;
+        }
+        if version < 8 {
+            conn.execute_batch(SCHEMA_V8)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

@@ -6,6 +6,7 @@ pub mod analyze;
 pub mod app;
 pub mod cli;
 pub mod db;
+pub mod error;
 pub mod history;
 pub mod instructions;
 pub mod project;

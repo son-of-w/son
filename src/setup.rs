@@ -289,7 +289,23 @@ pub fn run(database: &Path, opts: &Options) -> Result<()> {
         );
     }
     if failed > 0 {
-        bail!("{failed} agent(s) could not be set up fully; see above");
+        // With --json the report above went to stdout as one valid object;
+        // this error goes to stderr and names what failed.
+        let reasons: Vec<String> = done
+            .iter()
+            .flat_map(|i| [&i.skill, &i.rules])
+            .filter_map(|step| match step {
+                Step::Failed(path, reason) => Some(format!("{}: {reason}", short(path))),
+                _ => None,
+            })
+            .collect();
+        return Err(crate::error::coded(
+            "install_failed",
+            format!(
+                "{failed} agent(s) could not be set up fully: {}",
+                reasons.join("; ")
+            ),
+        ));
     }
     Ok(())
 }

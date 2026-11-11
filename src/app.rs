@@ -6,6 +6,7 @@ use crate::analyze::Analyzer;
 use crate::cli::{
     Cli, Command, Evidence, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand,
 };
+use crate::error::coded;
 use crate::history::{self, Recorder};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
@@ -13,7 +14,7 @@ use crate::store::{self, Meta, NewNode, Node, Ref, TODO_STATUSES};
 use crate::{db, instructions, project, report, setup, transfer};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 use std::cell::RefCell;
 use std::io::Read;
@@ -202,6 +203,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             evidence,
             refs,
             check: _,
+            key,
         } => {
             let body = read_body(body)?;
             app.remember(&Remember {
@@ -213,6 +215,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 links: &link,
                 evidence,
                 refs: &refs,
+                key: key.as_deref(),
             })
         }
         Command::Recall {
@@ -285,6 +288,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 evidence,
                 refs,
                 check: _,
+                key,
             } => {
                 let body = read_body(body)?;
                 app.remember(&Remember {
@@ -296,6 +300,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                     links: &[],
                     evidence,
                     refs: &refs,
+                    key: key.as_deref(),
                 })
             }
             TodoCommand::List {
@@ -416,9 +421,12 @@ fn check(
 }
 
 fn no_collection(name: &str) -> anyhow::Error {
-    anyhow!(
-        "no collection named '{}' (see `son collections`)",
-        name.trim()
+    coded(
+        "unknown_collection",
+        format!(
+            "no collection named '{}' (see `son collections`)",
+            name.trim()
+        ),
     )
 }
 
@@ -446,6 +454,8 @@ struct Remember<'a> {
     links: &'a [String],
     evidence: Option<Evidence>,
     refs: &'a [String],
+    /// The idempotency key, if the caller gave one.
+    key: Option<&'a str>,
 }
 
 /// What `son edit` was asked to change.
@@ -574,7 +584,56 @@ impl App {
         }
         let evidence = new.evidence.and_then(Evidence::stored);
         let refs = parse_refs(new.refs)?;
-        let id = store::write(&self.conn, || {
+        let key = new.key.map(str::trim);
+        if key.is_some_and(|key| key.is_empty() || key.chars().count() > 200) {
+            return Err(coded("invalid_argument", "--key needs 1 to 200 characters"));
+        }
+        // What was asked, in one fixed form: the same request gives the
+        // same text, whatever the order of tags or the spaces around them.
+        let request_collection = if kind == NodeType::Collection {
+            None
+        } else {
+            Some(project_name(project)?.to_lowercase())
+        };
+        let mut request_refs = refs.clone();
+        request_refs.sort();
+        request_refs.dedup();
+        let request = json!({
+            "command": "remember",
+            "type": kind.as_str(),
+            "title": title,
+            "body": body,
+            "collection": request_collection,
+            "tags": store::clean_tags(tags),
+            "links": links,
+            "evidence": evidence,
+            "refs": request_refs,
+        })
+        .to_string();
+        let saved = store::write(&self.conn, || {
+            if let Some(key) = key {
+                let earlier: Option<(String, String)> = self
+                    .conn
+                    .query_row(
+                        "SELECT request, result FROM idempotency WHERE key = ?1",
+                        [key],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                match earlier {
+                    Some((asked, result)) if asked == request => return Ok(Err(result)),
+                    Some(_) => {
+                        return Err(coded(
+                            "idempotency_conflict",
+                            format!(
+                                "the key '{key}' was already used for a different write. Nothing was saved; \
+                                 use a new key for a new write"
+                            ),
+                        ))
+                    }
+                    None => {}
+                }
+            }
             let mut rec = Recorder::new(&self.conn, "create");
             let id = if kind == NodeType::Collection {
                 if project.is_some() {
@@ -621,11 +680,54 @@ impl App {
                 rec.link(&id, relation.as_str(), &to)?;
             }
             rec.finish(&self.meta)?;
-            Ok(id)
+            if let Some(key) = key {
+                // The answer is kept with the write, in the same transaction.
+                let node = store::get_node(&self.conn, &id)?;
+                self.conn.execute(
+                    &format!(
+                        "INSERT INTO idempotency (key, command, request, node_id, result, created_at) \
+                         VALUES (?1, 'remember', ?2, ?3, ?4, {})",
+                        store::NOW
+                    ),
+                    rusqlite::params![key, request, id, render::node_json(&node).to_string()],
+                )?;
+            }
+            Ok(Ok(id))
         })?;
-        let node = store::get_node(&self.conn, &id)?;
-        self.note_node(&node);
-        render::saved("saved", &node, self.json);
+        match saved {
+            Ok(id) => {
+                let node = store::get_node(&self.conn, &id)?;
+                self.note_node(&node);
+                render::saved("saved", &node, self.json);
+            }
+            // The same key and the same request: give the first answer
+            // again, exactly, and save nothing.
+            Err(result) => {
+                let node: Node = serde_json::from_str(&result)
+                    .context("the stored answer for this key cannot be read")?;
+                self.note_node(&node);
+                self.note(|draft| {
+                    draft.detail = Some(format!(
+                        "replay of key {}: {}",
+                        key.unwrap_or_default(),
+                        draft.detail.clone().unwrap_or_default()
+                    ));
+                });
+                if self.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(
+                            &result
+                        )?)?
+                    );
+                } else {
+                    println!(
+                        "saved {} (already saved with this key; nothing new was written)",
+                        render::line(&node)
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1280,8 +1382,12 @@ impl App {
         } else {
             std::fs::read_to_string(file).with_context(|| format!("cannot read {file}"))?
         };
-        let mut dump: transfer::Dump = serde_json::from_str(&text)
-            .context("this is not a son JSON export (make one with `son export --json`)")?;
+        let mut dump: transfer::Dump = serde_json::from_str(&text).map_err(|err| {
+            coded(
+                "import_failed",
+                format!("this is not a son JSON export (make one with `son export --json`): {err}"),
+            )
+        })?;
         dump.upgrade()?;
         self.note(|draft| draft.detail = Some(file.to_string()));
         let stats = transfer::import(&self.conn, &self.an, &self.meta, &dump)?;
