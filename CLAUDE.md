@@ -13,6 +13,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 ## Git and GitHub
 
 - After each feature is implemented and `make check` passes, commit it and push to `main` without asking. Do not push a state that fails the checks.
+- Each feature commit also raises the version in `Cargo.toml`. Raise the patch number (0.1.0 to 0.1.1) by default. Raise the minor number (0.1.4 to 0.2.0) only for a large new capability or a change that breaks existing use, such as a removed or renamed command or flag. Then run `cargo build` so `Cargo.lock` carries the new version; CI builds with `--locked` and fails if it does not. Changes to docs only do not raise the version.
 - No Claude or Claude Code attribution anywhere: no `Co-Authored-By` trailer, no "Generated with" line in commits, pull requests, or release notes.
 - A release is made only when William asks for one. To release: set the version in `Cargo.toml`, commit, then push a tag `v<version>`. The Release workflow builds both Mac binaries and publishes them.
 
