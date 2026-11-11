@@ -1,4 +1,4 @@
-- P2 #11 [Evaluate the memory loop across agents and task types](todos/11.md)
+- P2 #11 [Evaluate the memory loop across agents and task types](todos/11.md) — prepared; the agent runs wait for access
 - P2 #13 [Version 2: optional central store and sync](todos/13.md)
   - P2 #13.1 [Configure named central-store remotes](todos/13.1.md)
   - P2 #13.2 [Add explicit sharing controls](todos/13.2.md)

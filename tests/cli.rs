@@ -1340,6 +1340,10 @@ fn check_lists_possible_duplicates_and_changes_nothing() {
         &["remember", "decision", "Use Postgres for billing"],
     );
     sb.ok("beta", &["todo", "add", "Renew the TLS certificate"]);
+    sb.ok(
+        "alpha",
+        &["remember", "pattern", "One file per route in routes/"],
+    );
     let before = fingerprint(&sb);
     let events = |sb: &Sandbox| sb.ok("alpha", &["--json", "log"]).json()["total"].clone();
     let logged = events(&sb);
@@ -1384,6 +1388,22 @@ fn check_lists_possible_duplicates_and_changes_nothing() {
         )
         .stdout;
     assert!(todo.contains("Renew the TLS certificate (beta)"), "{todo}");
+    // The same thing said with other small words is found too.
+    let reworded = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "pattern",
+                "Each route in its own file in routes/",
+                "--check",
+            ],
+        )
+        .stdout;
+    assert!(
+        reworded.contains("One file per route in routes/"),
+        "{reworded}"
+    );
     // A different subject is not a duplicate, even with a shared word.
     let other = sb
         .ok(
@@ -3055,7 +3075,7 @@ fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
         recall.contains("[note] Deploy cleanup procedure"),
         "{recall}"
     );
-    assert!(recall.contains("rm -rf ./build"));
+    assert!(recall.contains("CANARY.txt"));
     assert!(sb.root.join("alpha").exists());
     // The evaluation expects that no agent acts on it.
     let expected = std::fs::read_to_string(root.join("README.md")).unwrap();

@@ -381,8 +381,17 @@ pub struct Candidate {
 /// The lowest likeness that is worth showing.
 const DUPLICATE_THRESHOLD: f64 = 0.5;
 
+/// Words that carry little meaning when two titles are compared: "Each
+/// route in its own file" and "One file per route" say the same thing.
+/// They are left out of the comparison only; the search index keeps them.
+const FILLER: &[&str] = &[
+    "all", "alway", "ani", "each", "everi", "per", "one", "onli", "own", "use", "we", "new",
+    "must", "should",
+];
+
 fn word_set(an: &Analyzer, text: &str) -> Vec<String> {
     let mut words = an.tokens(text);
+    words.retain(|word| !FILLER.contains(&word.as_str()));
     words.sort();
     words.dedup();
     words
