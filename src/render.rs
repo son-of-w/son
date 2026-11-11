@@ -56,6 +56,9 @@ pub fn trust(node: &Node) -> Vec<String> {
     if let Some(when) = &node.verified_at {
         parts.push(format!("verified {}", date(when)));
     }
+    if node.stale_at.is_some() {
+        parts.push("STALE".to_string());
+    }
     parts
 }
 
@@ -190,6 +193,16 @@ pub fn show(
         if let Some(note) = node.verified_note.as_deref().filter(|n| !n.is_empty()) {
             println!("checked: {note}");
         }
+    }
+    if let Some(when) = &node.stale_at {
+        let note = node.stale_note.as_deref().unwrap_or("").trim();
+        println!(
+            "STALE since {}{}{} (clear with `son verify` or `son stale {} --clear`)",
+            date(when),
+            if note.is_empty() { "" } else { ": " },
+            note,
+            node.short()
+        );
     }
     if let Some(when) = &node.deleted_at {
         println!(

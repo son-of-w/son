@@ -12,6 +12,7 @@ pub mod instructions;
 pub mod project;
 pub mod render;
 pub mod report;
+pub mod review;
 pub mod search;
 pub mod setup;
 pub mod store;

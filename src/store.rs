@@ -27,9 +27,9 @@ pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p
     n.evidence, n.verified_at, n.verified_by, n.verified_note, \
     (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
        FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value)), \
-    n.merged_into";
+    n.merged_into, n.stale_at, n.stale_note";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 22;
+pub const NCOLS: usize = 24;
 
 /// How a piece of knowledge was learned. This says where it came from, not
 /// that it is true. A node with none of these has unknown provenance.
@@ -140,6 +140,13 @@ pub struct Node {
     /// For a node that was merged into another: the id of that node.
     #[serde(default)]
     pub merged_into: Option<String>,
+    /// When someone marked this as out of date. Only `son stale` and
+    /// `son verify` change it; an edit does not.
+    #[serde(default)]
+    pub stale_at: Option<String>,
+    /// Why it was marked.
+    #[serde(default)]
+    pub stale_note: Option<String>,
 }
 
 impl Node {
@@ -197,6 +204,8 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default(),
         merged_into: row.get(21)?,
+        stale_at: row.get(22)?,
+        stale_note: row.get(23)?,
     })
 }
 
@@ -303,7 +312,8 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
         &format!(
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
              evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
-             deleted_at = ?11, merged_into = ?12, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             deleted_at = ?11, merged_into = ?12, stale_at = ?13, stale_note = ?14, \
+             updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -317,7 +327,9 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             node.verified_by,
             node.verified_note,
             node.deleted_at,
-            node.merged_into
+            node.merged_into,
+            node.stale_at,
+            node.stale_note
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;
@@ -460,13 +472,32 @@ pub fn set_refs(conn: &Connection, id: &str, refs: &[Ref]) -> Result<()> {
     Ok(())
 }
 
+/// Mark the node as out of date, with the reason. The content and
+/// `updated_at` do not change.
+pub fn mark_stale(conn: &Connection, id: &str, note: &str) -> Result<()> {
+    conn.execute(
+        &format!("UPDATE nodes SET stale_at = {NOW}, stale_note = ?2, rev = rev + 1 WHERE id = ?1"),
+        params![id, note],
+    )?;
+    Ok(())
+}
+
+pub fn clear_stale(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET stale_at = NULL, stale_note = NULL, rev = rev + 1 WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
+}
+
 /// Record that the node was checked against its evidence: `note` says what
-/// was checked. The content and `updated_at` do not change.
+/// was checked. The content and `updated_at` do not change. A node that
+/// was checked and found right is no longer stale.
 pub fn verify(conn: &Connection, id: &str, by: Option<&str>, note: &str) -> Result<()> {
     conn.execute(
         &format!(
             "UPDATE nodes SET verified_at = {NOW}, verified_by = ?2, verified_note = ?3, \
-             rev = rev + 1 WHERE id = ?1"
+             stale_at = NULL, stale_note = NULL, rev = rev + 1 WHERE id = ?1"
         ),
         params![id, by, note],
     )?;

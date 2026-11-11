@@ -248,6 +248,44 @@ pub enum Command {
     },
     /// Undo a drop
     Restore { id: String },
+    /// Mark a node as out of date (it is kept, labeled, and still found)
+    Stale {
+        id: String,
+        /// Why it is out of date
+        #[arg(long, required_unless_present = "clear")]
+        reason: Option<String>,
+        /// Take the mark away
+        #[arg(long, conflicts_with = "reason")]
+        clear: bool,
+    },
+    /// List the nodes that need a second look, with the reason for each
+    ///
+    /// Stale nodes, facts and decisions not verified for a long time,
+    /// todos open for a long time, and possible duplicates. Review only
+    /// lists: it changes nothing.
+    Review {
+        /// Only this collection (default: every collection)
+        #[arg(long)]
+        collection: Option<String>,
+        /// Only this node type
+        #[arg(long = "type", value_enum)]
+        kind: Option<NodeType>,
+        /// List a fact not verified for more than this many days [default: 90]
+        #[arg(long, value_name = "DAYS")]
+        fact_days: Option<u32>,
+        /// List a decision not verified for more than this many days [default: 180]
+        #[arg(long, value_name = "DAYS")]
+        decision_days: Option<u32>,
+        /// List a todo open for more than this many days [default: 30]
+        #[arg(long, value_name = "DAYS")]
+        todo_days: Option<u32>,
+        /// Nodes on one page
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: u32,
+        /// Which page to show, from 1
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        page: u32,
+    },
     /// Merge one node into another: <source> is dropped, <survivor> stays
     ///
     /// The survivor gets the tags, the evidence references and the links of

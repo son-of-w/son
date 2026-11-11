@@ -29,6 +29,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage a
 - `src/search.rs` — recall: ranking and graph expansion
 - `src/render.rs` — markdown and JSON output
 - `src/activity.rs` — the activity log, paging, and the numbers for `son stats`
+- `src/review.rs` — `son review`: which nodes need a second look, and why
 - `src/report.rs` — output for `son list`, `son log`, `son stats`
 - `src/error.rs` — error codes, and the JSON error object for `--json`
 - `src/history.rs` — change history: what each command changed, and undo

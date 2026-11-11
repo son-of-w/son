@@ -3,7 +3,7 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -198,6 +198,13 @@ CREATE TABLE idempotency (
 CREATE INDEX idempotency_node ON idempotency(node_id);
 ";
 
+/// Version 9: a node can be marked stale, with a reason. It is a label
+/// that someone sets and clears; nothing becomes stale by itself.
+const SCHEMA_V9: &str = "
+ALTER TABLE nodes ADD COLUMN stale_at TEXT;
+ALTER TABLE nodes ADD COLUMN stale_note TEXT;
+";
+
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
@@ -362,6 +369,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         if version < 8 {
             conn.execute_batch(SCHEMA_V8)?;
+        }
+        if version < 9 {
+            conn.execute_batch(SCHEMA_V9)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

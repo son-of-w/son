@@ -205,6 +205,20 @@ fn changes(before: Option<&Node>, after: &Node) -> Vec<String> {
             after.refs.len()
         ));
     }
+    if before.stale_at != after.stale_at {
+        parts.push(match &after.stale_at {
+            Some(_) => format!(
+                "marked stale{}",
+                after
+                    .stale_note
+                    .as_deref()
+                    .filter(|n| !n.trim().is_empty())
+                    .map(|n| format!(" ({})", quoted(n)))
+                    .unwrap_or_default()
+            ),
+            None => "no longer stale".to_string(),
+        });
+    }
     if before.merged_into != after.merged_into {
         parts.push(match &after.merged_into {
             Some(into) => format!("merged into `{}`", store::short_id(into)),
@@ -272,6 +286,45 @@ fn entry_notes(entry: &Entry) -> String {
         notes.push_str(" (part purged; cannot be undone)");
     }
     notes
+}
+
+/// `son review`: the nodes that need attention, each with its reasons.
+pub fn review(page: &Page<crate::review::Item>, scope: &str, command: &str, json: bool) {
+    if json {
+        let items = page
+            .items
+            .iter()
+            .map(|item| {
+                let mut value = node_json(&item.node);
+                value["reasons"] =
+                    serde_json::to_value(&item.reasons).expect("reasons always serialize");
+                value
+            })
+            .collect();
+        print_json(&page_json(page, items));
+        return;
+    }
+    if page.total == 0 {
+        println!("Nothing needs review in {scope}.");
+        return;
+    }
+    page_header(&format!("Review: {scope}"), page, "node");
+    if page.items.is_empty() {
+        println!("\nThis page is past the end.");
+    }
+    for item in &page.items {
+        println!("- {}", render::line(&item.node));
+        for reason in &item.reasons {
+            println!("  - {}", reason.text);
+        }
+    }
+    println!(
+        "\nReview changes nothing. For each node, check it against what is true now, then:\n\
+         - still right: `son verify <id> --checked \"<what you checked>\"`\n\
+         - wrong or out of date: `son edit <id> ...`, or `son stale <id> --reason \"<why>\"` if you cannot fix it now\n\
+         - a finished todo: `son todo done <id>`; a duplicate: `son merge <source> <survivor>`; related but different: `son link <a> relates_to <b>`"
+    );
+    page_footer(page, command);
 }
 
 /// `son history <id>`: every operation that changed the node or its links.
@@ -432,7 +485,7 @@ fn remarks(stats: &Stats, set_up: bool) -> Vec<String> {
     }
     if stats.store.open_todos_older_than_30_days > 0 {
         remarks.push(format!(
-            "{} open todo(s) are older than 30 days.",
+            "{} open todo(s) are older than 30 days. See `son review`.",
             stats.store.open_todos_older_than_30_days
         ));
     }

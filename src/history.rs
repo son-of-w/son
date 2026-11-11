@@ -49,6 +49,8 @@ pub fn same_content(a: &Node, b: &Node) -> bool {
         && a.verified_note == b.verified_note
         && a.refs == b.refs
         && a.merged_into == b.merged_into
+        && a.stale_at == b.stale_at
+        && a.stale_note == b.stale_note
 }
 
 /// Collects what one operation changes, then writes it down. Use inside

@@ -49,6 +49,8 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Verify { .. } => ("verify", true),
         Command::Drop { .. } => ("drop", true),
         Command::Restore { .. } => ("restore", true),
+        Command::Stale { .. } => ("stale", true),
+        Command::Review { .. } => ("review", false),
         Command::Merge { .. } => ("merge", true),
         Command::History { .. } => ("history", false),
         Command::Undo { .. } => ("undo", true),
@@ -271,6 +273,28 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         } => app.verify(&id, checked.as_deref(), &refs, clear),
         Command::Drop { id, purge } => app.drop_node(&id, purge),
         Command::Restore { id } => app.restore(&id),
+        Command::Stale { id, reason, clear } => app.stale(&id, reason.as_deref(), clear),
+        Command::Review {
+            collection,
+            kind,
+            fact_days,
+            decision_days,
+            todo_days,
+            limit,
+            page,
+        } => {
+            let mut limits = crate::review::Limits::from_env();
+            limits.fact_days = fact_days.unwrap_or(limits.fact_days);
+            limits.decision_days = decision_days.unwrap_or(limits.decision_days);
+            limits.todo_days = todo_days.unwrap_or(limits.todo_days);
+            app.review(
+                collection.as_deref(),
+                kind,
+                &limits,
+                limit as usize,
+                page as usize,
+            )
+        }
         Command::Merge {
             source,
             survivor,
@@ -1035,6 +1059,105 @@ impl App {
             Ok(())
         })?;
         render::saved("restored", &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
+    }
+
+    fn stale(&self, id: &str, reason: Option<&str>, clear: bool) -> Result<()> {
+        let id = store::resolve_id(&self.conn, id)?;
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        let reason = reason.map(str::trim).unwrap_or("");
+        if !clear && reason.is_empty() {
+            bail!("say why it is out of date: --reason \"<text>\"");
+        }
+        if node.kind == "collection" {
+            bail!("a collection is a container; mark the nodes in it");
+        }
+        store::write(&self.conn, || {
+            let mut rec = Recorder::new(&self.conn, if clear { "unstale" } else { "stale" });
+            rec.touch(&id)?;
+            if !clear {
+                store::mark_stale(&self.conn, &id, reason)?;
+            } else if node.stale_at.is_some() {
+                store::clear_stale(&self.conn, &id)?;
+            }
+            rec.finish(&self.meta)?;
+            Ok(())
+        })?;
+        let verb = if clear {
+            "no longer stale:"
+        } else {
+            "marked stale:"
+        };
+        render::saved(verb, &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
+    }
+
+    fn review(
+        &self,
+        collection: Option<&str>,
+        kind: Option<NodeType>,
+        limits: &crate::review::Limits,
+        limit: usize,
+        page: usize,
+    ) -> Result<()> {
+        let (scope, collection_id) = match collection {
+            Some(name) => {
+                let id = store::find_project(&self.conn, name.trim())?
+                    .ok_or_else(|| no_collection(name))?;
+                (name.trim().to_string(), Some(id))
+            }
+            None => ("all collections".to_string(), None),
+        };
+        let all = crate::review::items(
+            &self.conn,
+            &self.an,
+            limits,
+            &crate::review::Filter {
+                collection_id: collection_id.as_deref(),
+                kind: kind.map(NodeType::as_str),
+            },
+        )?;
+        let total = all.len() as i64;
+        let items: Vec<_> = all
+            .into_iter()
+            .skip(limit * (page - 1))
+            .take(limit)
+            .collect();
+        self.note(|draft| {
+            draft.project = collection.map(|name| name.trim().to_string());
+            draft.results = Some(total);
+        });
+        let mut again = "son review".to_string();
+        if let Some(name) = collection {
+            again.push_str(&format!(" --collection {}", name.trim()));
+        }
+        if let Some(kind) = kind {
+            again.push_str(&format!(" --type {}", kind.as_str()));
+        }
+        let default = crate::review::Limits::from_env();
+        for (flag, value, usual) in [
+            ("--fact-days", limits.fact_days, default.fact_days),
+            (
+                "--decision-days",
+                limits.decision_days,
+                default.decision_days,
+            ),
+            ("--todo-days", limits.todo_days, default.todo_days),
+        ] {
+            if value != usual {
+                again.push_str(&format!(" {flag} {value}"));
+            }
+        }
+        if limit != 20 {
+            again.push_str(&format!(" --limit {limit}"));
+        }
+        report::review(
+            &activity::Page::new(items, total, limit, page),
+            &scope,
+            &again,
+            self.json,
+        );
         Ok(())
     }
 

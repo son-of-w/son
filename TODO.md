@@ -1,4 +1,3 @@
-- P2 #3 [Add a memory review and freshness workflow](todos/3.md)
 - P2 #9 [Add consistent local backups and diagnostics](todos/9.md)
 - P2 #11 [Evaluate the memory loop across agents and task types](todos/11.md)
 - P2 #13 [Version 2: optional central store and sync](todos/13.md)

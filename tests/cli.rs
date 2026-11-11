@@ -2282,6 +2282,335 @@ fn explain_says_why_without_changing_the_order() {
         .contains("why:"));
 }
 
+/// Set a node's times to a number of days (and a little more, or less)
+/// before now. `shift` is in hours: negative is older.
+fn age(sb: &Sandbox, id: &str, column: &str, days: i64, shift_hours: i64) {
+    let db = rusqlite::Connection::open(sb.root.join("son.db")).unwrap();
+    let changed = db
+        .execute(
+            &format!(
+                "UPDATE nodes SET {column} = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2, ?3) \
+                 WHERE id LIKE '%' || upper(?1)"
+            ),
+            rusqlite::params![id, format!("-{days} days"), format!("{shift_hours} hours")],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+fn review_ids(sb: &Sandbox, args: &[&str]) -> Vec<(String, Vec<String>)> {
+    let mut full = vec!["--json", "review"];
+    full.extend(args);
+    sb.ok("alpha", &full).json()["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            (
+                item["short_id"].as_str().unwrap().to_string(),
+                item["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r["code"].as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn review_lists_what_needs_attention_and_changes_nothing() {
+    let sb = Sandbox::new("review");
+    let new = |kind: &str, title: &str| sb.ok("alpha", &["remember", kind, title]).id();
+    let fact_new = new("fact", "Mainsail colour is red");
+    let fact_before = new("fact", "Anchor chain is forty metres");
+    let fact_after = new("fact", "Galley stove uses paraffin");
+    let fact_verified = new("fact", "Bilge pump was replaced");
+    let decision_before = new("decision", "Winter berth stays in Lisbon");
+    let decision_after = new("decision", "Hull paint is copper based");
+    let pattern = new("pattern", "Checklist before leaving harbour");
+    let note = new("note", "Logbook from the summer crossing");
+    let todo_before = sb
+        .ok("alpha", &["todo", "add", "Order spare impeller"])
+        .id();
+    let todo_after = sb
+        .ok("alpha", &["todo", "add", "Service the liferaft"])
+        .id();
+    let todo_done = sb
+        .ok("alpha", &["todo", "add", "Renew harbour permit"])
+        .id();
+    sb.ok("alpha", &["todo", "done", &todo_done]);
+    assert!(sb
+        .ok("alpha", &["review"])
+        .stdout
+        .contains("Nothing needs review"));
+
+    // One hour inside the limit, and one hour past it.
+    age(&sb, &fact_before, "created_at", 90, 1);
+    age(&sb, &fact_after, "created_at", 90, -1);
+    age(&sb, &decision_before, "created_at", 180, 1);
+    age(&sb, &decision_after, "created_at", 180, -1);
+    age(&sb, &todo_before, "created_at", 30, 1);
+    age(&sb, &todo_after, "created_at", 30, -1);
+    age(&sb, &todo_done, "created_at", 400, 0);
+    // Old types that have no limit, and an old fact that was verified lately.
+    age(&sb, &pattern, "created_at", 900, 0);
+    age(&sb, &note, "created_at", 900, 0);
+    age(&sb, &fact_verified, "created_at", 500, 0);
+    sb.ok(
+        "alpha",
+        &["verify", &fact_verified, "--checked", "looked at the pump"],
+    );
+    let _ = &fact_new;
+
+    let before = fingerprint(&sb);
+    let listed = review_ids(&sb, &[]);
+    let ids: Vec<&str> = listed.iter().map(|(id, _)| id.as_str()).collect();
+    let mut expected = vec![
+        fact_after.as_str(),
+        decision_after.as_str(),
+        todo_after.as_str(),
+    ];
+    expected.sort();
+    let mut got = ids.clone();
+    got.sort();
+    assert_eq!(got, expected, "{listed:?}");
+    let reason = |id: &str| listed.iter().find(|(i, _)| i == id).unwrap().1.clone();
+    assert_eq!(reason(&fact_after), ["not_verified"]);
+    assert_eq!(reason(&todo_after), ["old_todo"]);
+    let text = sb.ok("alpha", &["review"]).stdout;
+    assert!(
+        text.contains("fact never verified, 90 days old (limit 90)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("decision never verified, 180 days old (limit 180)"),
+        "{text}"
+    );
+    assert!(text.contains("todo open for 30 days (limit 30)"), "{text}");
+    assert!(text.contains("Review changes nothing"));
+
+    // The limits can be changed, by flag and by environment.
+    let tighter = review_ids(
+        &sb,
+        &[
+            "--fact-days",
+            "89",
+            "--decision-days",
+            "179",
+            "--todo-days",
+            "29",
+        ],
+    );
+    assert_eq!(tighter.len(), 6, "{tighter:?}");
+    let looser = review_ids(
+        &sb,
+        &[
+            "--fact-days",
+            "91",
+            "--decision-days",
+            "181",
+            "--todo-days",
+            "31",
+        ],
+    );
+    assert!(looser.is_empty(), "{looser:?}");
+    let by_env = sb
+        .command("alpha", &["--json", "review"])
+        .env("SON_REVIEW_FACT_DAYS", "91")
+        .env("SON_REVIEW_TODO_DAYS", "29")
+        .output()
+        .unwrap();
+    let by_env: Value = serde_json::from_slice(&by_env.stdout).unwrap();
+    assert_eq!(by_env["total"], 3, "{by_env}");
+    // Filters and pages.
+    assert_eq!(review_ids(&sb, &["--type", "todo"]).len(), 1);
+    assert!(review_ids(&sb, &["--collection", "alpha", "--limit", "2"]).len() == 2);
+    let page = sb.ok("alpha", &["review", "--limit", "2"]).stdout;
+    assert!(
+        page.contains("page 1 of 2") && page.contains("Next page: `son review --limit 2 --page 2`"),
+        "{page}"
+    );
+    assert!(!sb.son("alpha", &["review", "--collection", "nope"]).ok);
+    // Review wrote nothing to the nodes.
+    let unchanged = |sb: &Sandbox| sb.ok("alpha", &["--json", "export"]).json()["nodes"].clone();
+    let nodes = unchanged(&sb);
+    sb.ok("alpha", &["review"]);
+    assert_eq!(unchanged(&sb), nodes);
+    let _ = before;
+
+    // An edit does not restart the count; a verification does.
+    sb.ok(
+        "alpha",
+        &["edit", &fact_after, "--body", "Checked the label."],
+    );
+    assert!(review_ids(&sb, &[]).iter().any(|(id, _)| id == &fact_after));
+    sb.ok(
+        "alpha",
+        &[
+            "verify",
+            &fact_after,
+            "--checked",
+            "read the label on the stove",
+        ],
+    );
+    assert!(!review_ids(&sb, &[]).iter().any(|(id, _)| id == &fact_after));
+    // A verification that is itself old is listed again, and says so.
+    age(&sb, &fact_after, "verified_at", 91, 0);
+    assert!(sb
+        .ok("alpha", &["review"])
+        .stdout
+        .contains("fact last verified 91 days ago"));
+    sb.ok(
+        "alpha",
+        &["verify", &fact_after, "--checked", "read it again"],
+    );
+    // A finished todo leaves the list.
+    sb.ok("alpha", &["todo", "done", &todo_after]);
+    assert!(!review_ids(&sb, &[]).iter().any(|(id, _)| id == &todo_after));
+
+    // Stale: explicit, labeled, first in the list, kept through an edit.
+    assert!(!sb.son("alpha", &["stale", &pattern]).ok);
+    sb.ok(
+        "alpha",
+        &["stale", &pattern, "--reason", "the harbour rules changed"],
+    );
+    let listed = review_ids(&sb, &[]);
+    assert_eq!(listed[0], (pattern.clone(), vec!["stale".to_string()]));
+    assert!(sb
+        .ok("alpha", &["review"])
+        .stdout
+        .contains("marked stale: the harbour rules changed"));
+    sb.ok(
+        "alpha",
+        &["edit", &pattern, "--body", "Fuel, water, weather."],
+    );
+    let shown = sb.ok("alpha", &["--json", "show", &pattern]).json();
+    assert!(shown["stale_at"].is_string());
+    assert_eq!(shown["stale_note"], "the harbour rules changed");
+    assert!(sb
+        .ok("alpha", &["show", &pattern])
+        .stdout
+        .contains("STALE since"));
+    assert!(sb
+        .ok("alpha", &["recall", "checklist", "harbour"])
+        .stdout
+        .contains("· STALE"));
+    assert!(sb.ok("alpha", &["context"]).stdout.contains("[STALE]"));
+    assert!(sb
+        .ok("alpha", &["history", &pattern])
+        .stdout
+        .contains("marked stale"));
+    // It survives export and import.
+    let file = sb.root.join("dump.json");
+    std::fs::write(&file, sb.ok("alpha", &["export", "--json"]).stdout).unwrap();
+    let other = Sandbox::new("review-target");
+    other.ok("alpha", &["import", file.to_str().unwrap()]);
+    assert_eq!(
+        other.ok("alpha", &["--json", "show", &pattern]).json()["stale_note"],
+        "the harbour rules changed"
+    );
+    // Verifying it, or clearing the mark, ends it; both can be undone.
+    sb.ok(
+        "alpha",
+        &[
+            "verify",
+            &pattern,
+            "--checked",
+            "read the new harbour rules",
+        ],
+    );
+    assert!(sb.ok("alpha", &["--json", "show", &pattern]).json()["stale_at"].is_null());
+    sb.ok("alpha", &["undo", &pattern]);
+    assert!(sb.ok("alpha", &["--json", "show", &pattern]).json()["stale_at"].is_string());
+    sb.ok("alpha", &["stale", &pattern, "--clear"]);
+    assert!(sb.ok("alpha", &["--json", "show", &pattern]).json()["stale_at"].is_null());
+
+    sb.ok(
+        "alpha",
+        &["verify", &decision_after, "--checked", "read the paint tin"],
+    );
+
+    // Possible duplicates: listed once, on the newer node; a link settles it.
+    let twin = new("fact", "The anchor chain is forty metres");
+    let listed = review_ids(&sb, &[]);
+    assert_eq!(
+        listed,
+        vec![(twin.clone(), vec!["possible_duplicate".to_string()])],
+        "{listed:?}"
+    );
+    assert!(sb
+        .ok("alpha", &["review"])
+        .stdout
+        .contains(&format!("may duplicate `{fact_before}`")));
+    sb.ok("alpha", &["link", &twin, "relates_to", &fact_before]);
+    assert!(review_ids(&sb, &[]).is_empty());
+}
+
+#[test]
+fn a_stale_mark_does_not_change_the_ranking() {
+    let sb = Sandbox::new("stale-rank");
+    let a = sb
+        .ok(
+            "alpha",
+            &["remember", "decision", "Deploy with blue green releases"],
+        )
+        .id();
+    let b = sb
+        .ok(
+            "alpha",
+            &["remember", "decision", "Deploy on weekdays only"],
+        )
+        .id();
+    let c = sb
+        .ok(
+            "alpha",
+            &["remember", "decision", "Deploy from the main branch"],
+        )
+        .id();
+    sb.ok("alpha", &["link", &c, "supersedes", &b]);
+    let scores = |sb: &Sandbox| -> Vec<(String, f64)> {
+        sb.ok(
+            "alpha",
+            &["--json", "recall", "deploy", "releases", "--hops", "0"],
+        )
+        .json()["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["short_id"].as_str().unwrap().to_string(),
+                    h["score"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let before = scores(&sb);
+    assert_eq!(before[0].0, a);
+    sb.ok("alpha", &["stale", &a, "--reason", "under discussion"]);
+    sb.ok("alpha", &["stale", &b, "--reason", "replaced"]);
+    let after = scores(&sb);
+    // The same order and the same scores: stale is a label only.
+    assert_eq!(after, before);
+    let hits = sb
+        .ok(
+            "alpha",
+            &["--json", "recall", "deploy", "releases", "--explain"],
+        )
+        .json();
+    let hits = hits["hits"].as_array().unwrap();
+    assert!(hits[0]["stale_at"].is_string());
+    assert!(!hits[0]["why"]["factors"].to_string().contains("stale"));
+    // A node that is stale and superseded keeps its superseded penalty.
+    let old = hits.iter().find(|h| h["short_id"] == b.as_str()).unwrap();
+    assert!(old["stale_at"].is_string());
+    assert!(old["why"]["factors"].to_string().contains("superseded"));
+    let text = sb.ok("alpha", &["recall", "deploy"]).stdout;
+    assert!(text.contains("STALE") && text.contains("SUPERSEDED"));
+}
+
 #[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");

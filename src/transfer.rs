@@ -240,8 +240,9 @@ pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Res
             conn.execute(
                 "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, \
                                     deleted_at, source, origin, author, visibility, rev, \
-                                    evidence, verified_at, verified_by, verified_note, merged_into) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
+                                    evidence, verified_at, verified_by, verified_note, merged_into, \
+                                    stale_at, stale_note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21) \
                  ON CONFLICT(id) DO UPDATE SET \
                     type = excluded.type, title = excluded.title, body = excluded.body, \
                     status = excluded.status, project_id = excluded.project_id, \
@@ -251,7 +252,8 @@ pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Res
                     visibility = excluded.visibility, rev = excluded.rev, \
                     evidence = excluded.evidence, verified_at = excluded.verified_at, \
                     verified_by = excluded.verified_by, verified_note = excluded.verified_note, \
-                    merged_into = excluded.merged_into",
+                    merged_into = excluded.merged_into, stale_at = excluded.stale_at, \
+                    stale_note = excluded.stale_note",
                 params![
                     node.id,
                     node.kind,
@@ -271,7 +273,9 @@ pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Res
                     node.verified_at,
                     node.verified_by,
                     node.verified_note,
-                    node.merged_into
+                    node.merged_into,
+                    node.stale_at,
+                    node.stale_note
                 ],
             )?;
             store::set_tags(conn, &node.id, &node.tags)?;
