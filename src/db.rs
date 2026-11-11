@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: i64 = 3;
 
@@ -123,8 +123,19 @@ pub fn open(path: &Path) -> Result<Connection> {
     }
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open database {}", path.display()))?;
-    conn.busy_timeout(Duration::from_secs(5))?;
-    conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+    conn.busy_timeout(BUSY_WAIT)?;
+    // Switching a new database to WAL needs the file to itself for a moment.
+    // When many sessions open a brand-new database at once, SQLite refuses
+    // the others at once, without waiting, so wait and try again here. A
+    // database that is already in WAL mode is left as it is.
+    retry_busy(|| {
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+        }
+        Ok(())
+    })
+    .context("cannot switch the database to WAL mode")?;
     // In WAL mode this keeps the database safe from corruption and skips a
     // disk flush on every commit, which matters now that every command
     // writes a row to the activity log.
@@ -134,8 +145,36 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// How long to wait for another session to finish with the database.
+const BUSY_WAIT: Duration = Duration::from_secs(10);
+
+/// Run `f`, and run it again for as long as SQLite answers "busy" or
+/// "locked", up to [`BUSY_WAIT`]. SQLite's own busy timeout covers most
+/// waits, but not all: some locks are refused at once (changing the journal
+/// mode, WAL recovery, a read that must become a write).
+pub fn retry_busy<T>(mut f: impl FnMut() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    let deadline = Instant::now() + BUSY_WAIT;
+    let mut pause = Duration::from_millis(5);
+    loop {
+        match f() {
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if matches!(
+                    err.code,
+                    ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
+                ) && Instant::now() < deadline =>
+            {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(100));
+            }
+            other => return other,
+        }
+    }
+}
+
 fn user_version(conn: &Connection) -> Result<i64> {
-    Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+    Ok(retry_busy(|| {
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+    })?)
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -150,7 +189,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     // Take the write lock, then look again: another session may have
     // created the schema while this one waited.
-    conn.execute_batch("BEGIN IMMEDIATE")?;
+    retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE"))?;
     let result = (|| -> Result<()> {
         let version = user_version(conn)?;
         if version < 1 {

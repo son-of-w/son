@@ -147,7 +147,7 @@ pub struct NewNode<'a> {
 /// Run `f` inside one write transaction. The lock is taken at the start, so
 /// parallel sessions queue up (see the busy timeout) and never deadlock.
 pub fn write<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    conn.execute_batch("BEGIN IMMEDIATE")?;
+    crate::db::retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE"))?;
     match f() {
         Ok(value) => {
             conn.execute_batch("COMMIT")?;

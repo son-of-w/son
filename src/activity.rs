@@ -44,6 +44,11 @@ fn clip(text: &str) -> String {
 }
 
 pub fn record(conn: &Connection, event: &Event) -> Result<()> {
+    crate::db::retry_busy(|| record_once(conn, event))?;
+    Ok(())
+}
+
+fn record_once(conn: &Connection, event: &Event) -> rusqlite::Result<usize> {
     conn.execute(
         &format!(
             "INSERT INTO events (at, command, kind, ok, project, source, node_id, detail, results, close, ms, error) \
@@ -63,8 +68,7 @@ pub fn record(conn: &Connection, event: &Event) -> Result<()> {
             event.ms,
             event.error.as_deref().map(clip),
         ],
-    )?;
-    Ok(())
+    )
 }
 
 /// One page of something, with what is needed to print "page 2 of 7".
