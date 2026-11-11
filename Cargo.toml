@@ -1,0 +1,24 @@
+[package]
+name = "son-of-w"
+version = "0.1.0"
+edition = "2021"
+description = "Local second brain for Claude sessions"
+repository = "https://github.com/Raxvis/son-of-w"
+
+[[bin]]
+name = "son"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+rust-stemmers = "1.2.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ulid = "3.0.0"
+unicode-normalization = "0.1.26"
+
+[profile.release]
+lto = true
+strip = true

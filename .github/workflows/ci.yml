@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: son-macos-arm64
+          path: target/release/son
+          if-no-files-found: error
