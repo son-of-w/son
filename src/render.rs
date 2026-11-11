@@ -1,6 +1,6 @@
 //! Output: compact markdown by default, JSON with `--json`.
 
-use crate::search::Recall;
+use crate::search::{Candidate, Recall};
 use crate::store::{Edge, Node, ProjectRow};
 use serde_json::{json, Value};
 
@@ -97,9 +97,56 @@ pub fn saved(verb: &str, node: &Node, json: bool) {
     }
 }
 
-pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: bool) {
+/// `son remember --check`: what a new node may duplicate. Nothing is saved,
+/// and the output says so in a way a script cannot miss.
+pub fn check(kind: &str, title: &str, collection: &str, candidates: &[Candidate], json: bool) {
+    if json {
+        let list: Vec<Value> = candidates
+            .iter()
+            .map(|c| {
+                let mut value = node_json(&c.node);
+                value["score"] = json!((c.score * 100.0).round() / 100.0);
+                value["reasons"] = json!(c.reasons);
+                value
+            })
+            .collect();
+        print_json(&json!({
+            "check": true,
+            "saved": false,
+            "type": kind,
+            "title": title,
+            "collection": collection,
+            "candidates": list,
+        }));
+        return;
+    }
+    println!("# Check: [{kind}] {title} (collection: {collection})");
+    println!("NOT SAVED. This only looked for stored nodes that may say the same thing.");
+    if candidates.is_empty() {
+        println!("\nNo likely duplicate. Run the command again without --check to save it.");
+        return;
+    }
+    println!("\n## Possible duplicates");
+    for c in candidates {
+        println!("- {} · {}", line(&c.node), c.reasons.join("; "));
+    }
+    println!(
+        "\nAlike words are a hint, not proof. Read a candidate with `son show <id>`. \
+         If it is the same knowledge, change it with `son edit <id>`. \
+         If it is not, run the command again without --check."
+    );
+}
+
+pub fn show(
+    node: &Node,
+    edges: &[Edge],
+    superseded_by: Option<&Node>,
+    merged_from: &[String],
+    json: bool,
+) {
     if json {
         let mut value = node_json(node);
+        value["merged_from"] = json!(merged_from);
         value["links"] = Value::Array(
             edges
                 .iter()
@@ -150,6 +197,20 @@ pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: boo
             date(when),
             node.short()
         );
+    }
+    if let Some(into) = &node.merged_into {
+        println!(
+            "MERGED into `{}` (see `son show {}`)",
+            crate::store::short_id(into),
+            crate::store::short_id(into)
+        );
+    }
+    if !merged_from.is_empty() {
+        let ids: Vec<String> = merged_from
+            .iter()
+            .map(|id| format!("`{}`", crate::store::short_id(id)))
+            .collect();
+        println!("merged from {}", ids.join(", "));
     }
     if let Some(newer) = superseded_by {
         println!("SUPERSEDED by `{}` {}", newer.short(), newer.title);

@@ -205,11 +205,20 @@ fn changes(before: Option<&Node>, after: &Node) -> Vec<String> {
             after.refs.len()
         ));
     }
+    if before.merged_into != after.merged_into {
+        parts.push(match &after.merged_into {
+            Some(into) => format!("merged into `{}`", store::short_id(into)),
+            None => "merge reversed".to_string(),
+        });
+    }
     if before.verified_at != after.verified_at {
         parts.push(match &after.verified_at {
             Some(_) => "verified".to_string(),
             None => "verification removed".to_string(),
         });
+    }
+    if parts.is_empty() {
+        parts.push("content unchanged".to_string());
     }
     parts
 }

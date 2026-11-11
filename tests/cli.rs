@@ -1290,6 +1290,400 @@ fn an_import_is_one_change_that_can_be_undone() {
         .contains("No matches"));
 }
 
+/// Everything in the sandbox that a command could change: the database
+/// file's bytes, and which files exist next to it.
+fn fingerprint(sb: &Sandbox) -> (Option<Vec<u8>>, Vec<String>) {
+    let mut names: Vec<String> = std::fs::read_dir(&sb.root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|name| !name.ends_with("-shm") && !name.ends_with("-wal"))
+        .collect();
+    names.sort();
+    (std::fs::read(sb.root.join("son.db")).ok(), names)
+}
+
+#[test]
+fn check_lists_possible_duplicates_and_changes_nothing() {
+    let sb = Sandbox::new("check");
+    // With no database yet: an empty answer, and still no database.
+    let out = sb.ok(
+        "alpha",
+        &["remember", "fact", "Deploy runs on Fridays", "--check"],
+    );
+    assert!(out.stdout.contains("NOT SAVED") && out.stdout.contains("No likely duplicate"));
+    assert!(!sb.root.join("son.db").exists());
+    let json = sb
+        .ok(
+            "alpha",
+            &["--json", "todo", "add", "Renew the certificate", "--check"],
+        )
+        .json();
+    assert_eq!(json["saved"], false);
+    assert_eq!(json["candidates"].as_array().unwrap().len(), 0);
+    assert!(json.get("id").is_none());
+    assert!(!sb.root.join("son.db").exists());
+
+    let fact = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                "Deploys run on Fridays",
+                "--body",
+                "After the standup.",
+            ],
+        )
+        .id();
+    sb.ok(
+        "alpha",
+        &["remember", "decision", "Use Postgres for billing"],
+    );
+    sb.ok("beta", &["todo", "add", "Renew the TLS certificate"]);
+    let before = fingerprint(&sb);
+    let events = |sb: &Sandbox| sb.ok("alpha", &["--json", "log"]).json()["total"].clone();
+    let logged = events(&sb);
+
+    // A match, with the reason. Stemming joins "deploy" and "deploys".
+    let out = sb
+        .ok(
+            "beta",
+            &["remember", "fact", "Deploy runs on Friday", "--check"],
+        )
+        .stdout;
+    assert!(
+        out.contains("NOT SAVED") && out.contains("## Possible duplicates"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("`{fact}`")) && out.contains("title shares"),
+        "{out}"
+    );
+    assert!(!out.contains("Postgres"));
+    let json = sb
+        .ok(
+            "alpha",
+            &[
+                "--json",
+                "remember",
+                "fact",
+                "deploys run on fridays",
+                "--check",
+            ],
+        )
+        .json();
+    assert_eq!(json["check"], true);
+    assert_eq!(json["saved"], false);
+    assert_eq!(json["candidates"][0]["short_id"], fact.as_str());
+    assert_eq!(json["candidates"][0]["reasons"][0], "same title");
+    // Across collections, and for todos.
+    let todo = sb
+        .ok(
+            "alpha",
+            &["todo", "add", "Renew TLS certificate", "--check"],
+        )
+        .stdout;
+    assert!(todo.contains("Renew the TLS certificate (beta)"), "{todo}");
+    // A different subject is not a duplicate, even with a shared word.
+    let other = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "decision",
+                "Use Redis for the session cache",
+                "--check",
+            ],
+        )
+        .stdout;
+    assert!(other.contains("No likely duplicate"), "{other}");
+
+    // A check that names a collection that does not exist does not make it.
+    let none = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "note",
+                "Something new",
+                "--collection",
+                "gamma",
+                "--check",
+            ],
+        )
+        .stdout;
+    assert!(none.contains("(collection: gamma)"));
+
+    // No check wrote anything: the database file is the same, byte for
+    // byte, and there is no new collection or log row.
+    assert!(fingerprint(&sb) == before, "a check changed the database");
+    assert_eq!(events(&sb), logged);
+    assert!(!sb.ok("alpha", &["collections"]).stdout.contains("gamma"));
+}
+
+#[test]
+fn merge_keeps_evidence_and_links_and_can_be_undone() {
+    let sb = Sandbox::new("merge");
+    let keep = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                "API port is 8443",
+                "--body",
+                "From the config.",
+                "--tag",
+                "net",
+                "--ref",
+                "file:config/server.toml",
+            ],
+        )
+        .id();
+    let dup = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                "The API listens on 8443",
+                "--body",
+                "William said so.",
+                "--tag",
+                "api,net",
+                "--evidence",
+                "user",
+                "--ref",
+                "user:William, 2026-11-11",
+            ],
+        )
+        .id();
+    let related = sb.ok("alpha", &["remember", "note", "Firewall rules"]).id();
+    let far = sb
+        .ok(
+            "beta",
+            &[
+                "remember",
+                "fact",
+                "API port is 8443",
+                "--body",
+                "From the config.",
+            ],
+        )
+        .id();
+    let todo = sb.ok("alpha", &["todo", "add", "API port is 8443"]).id();
+    sb.ok("alpha", &["link", &dup, "relates_to", &related]);
+    sb.ok("alpha", &["link", &related, "depends_on", &dup]);
+    sb.ok("alpha", &["link", &dup, "derived_from", &keep]);
+    sb.ok("alpha", &["link", &keep, "relates_to", &related]);
+
+    // Everything that must be refused, and that nothing changed.
+    let state = |sb: &Sandbox| {
+        (
+            sb.ok("alpha", &["--json", "show", &keep]).json(),
+            sb.ok("alpha", &["--json", "show", &dup]).json(),
+        )
+    };
+    let before = state(&sb);
+    for (args, message) in [
+        (vec!["merge", keep.as_str(), keep.as_str()], "into itself"),
+        (vec!["merge", todo.as_str(), keep.as_str()], "same type"),
+        (
+            vec!["merge", far.as_str(), keep.as_str()],
+            "--cross-collection",
+        ),
+        (
+            vec!["merge", dup.as_str(), keep.as_str()],
+            "the two bodies differ",
+        ),
+        (
+            vec![
+                "merge",
+                dup.as_str(),
+                keep.as_str(),
+                "--body",
+                "x",
+                "--title",
+                " ",
+            ],
+            "title is empty",
+        ),
+    ] {
+        let out = sb.son("alpha", &args);
+        assert!(
+            !out.ok && out.stderr.contains(message),
+            "{args:?}: {}",
+            out.stderr
+        );
+    }
+    assert_eq!(state(&sb), before);
+
+    // The caller settles the body.
+    let out = sb
+        .ok(
+            "alpha",
+            &[
+                "merge",
+                &dup,
+                &keep,
+                "--body",
+                "8443, in config/server.toml; William confirmed.",
+            ],
+        )
+        .stdout;
+    assert!(
+        out.contains(&format!("merged `{dup}` into `{keep}`")),
+        "{out}"
+    );
+    let merged = sb.ok("alpha", &["--json", "show", &keep]).json();
+    assert_eq!(
+        merged["body"],
+        "8443, in config/server.toml; William confirmed."
+    );
+    assert_eq!(merged["title"], "API port is 8443");
+    assert_eq!(merged["tags"], serde_json::json!(["api", "net"]));
+    assert_eq!(merged["evidence"], "user_statement");
+    assert_eq!(merged["refs"].as_array().unwrap().len(), 2);
+    assert_eq!(merged["merged_from"].as_array().unwrap().len(), 1);
+    // Links moved: no copy of the one the survivor had, none to itself.
+    let links: Vec<String> = merged["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            format!(
+                "{} {}",
+                l["relation"].as_str().unwrap(),
+                l["node"]["short_id"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(
+        links.contains(&format!("relates_to {related}"))
+            && links.contains(&format!("needed_by {related}"))
+    );
+
+    // The old id still leads somewhere, and search finds one node.
+    let old = sb.ok("alpha", &["show", &dup]).stdout;
+    assert!(
+        old.contains(&format!("MERGED into `{keep}`")) && old.contains("DROPPED"),
+        "{old}"
+    );
+    assert!(sb
+        .ok("alpha", &["show", &keep])
+        .stdout
+        .contains(&format!("merged from `{dup}`")));
+    let recall = sb
+        .ok(
+            "alpha",
+            &[
+                "recall",
+                "api",
+                "listens",
+                "8443",
+                "--collection",
+                "alpha",
+                "--type",
+                "fact",
+            ],
+        )
+        .stdout;
+    assert!(recall.contains(&format!("`{keep}`")) && !recall.contains(&format!("`{dup}`")));
+
+    // Both originals stay in the history.
+    let history = sb.ok("alpha", &["--json", "history", &keep]).json();
+    assert_eq!(history["items"][0]["kind"], "merge");
+    assert_eq!(history["items"][0]["before"]["body"], "From the config.");
+    let source_history = sb.ok("alpha", &["--json", "history", &dup]).json();
+    assert_eq!(
+        source_history["items"][0]["before"]["body"],
+        "William said so."
+    );
+    assert!(sb
+        .ok("alpha", &["history", &dup])
+        .stdout
+        .contains(&format!("merged into `{keep}`")));
+
+    // A second try is refused, and adds no links.
+    let again = sb.son("alpha", &["merge", &dup, &keep, "--body", "x"]);
+    assert!(again.stderr.contains("already merged"), "{}", again.stderr);
+
+    // A later change makes the undo unsafe: it is refused whole.
+    let merge_op = history["items"][0]["op"].to_string();
+    sb.ok("alpha", &["unlink", &related, "depends_on", &keep]);
+    let out = sb.son("alpha", &["undo", &keep, "--op", &merge_op]);
+    assert!(!out.ok && out.stderr.contains("the link"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("was changed after it"),
+        "{}",
+        out.stderr
+    );
+    assert!(sb.ok("alpha", &["--json", "show", &dup]).json()["deleted_at"].is_string());
+    sb.ok("alpha", &["undo", &keep]);
+    sb.ok("alpha", &["edit", &keep, "--tag", "api,net,port"]);
+    let out = sb.son("alpha", &["undo", &keep, "--op", &merge_op]);
+    assert!(
+        !out.ok && out.stderr.contains("was changed after it"),
+        "{}",
+        out.stderr
+    );
+    assert!(sb.ok("alpha", &["--json", "show", &dup]).json()["deleted_at"].is_string());
+    sb.ok("alpha", &["undo", &keep]);
+
+    // Now the merge can be undone: both nodes and all links come back.
+    let out = sb.ok("alpha", &["undo", &keep]).stdout;
+    assert!(out.contains("(merge)"), "{out}");
+    let after = state(&sb);
+    for field in [
+        "title",
+        "body",
+        "tags",
+        "evidence",
+        "refs",
+        "deleted_at",
+        "merged_into",
+    ] {
+        assert_eq!(after.0[field], before.0[field], "survivor {field}");
+        assert_eq!(after.1[field], before.1[field], "source {field}");
+    }
+    let links = |node: &Value| {
+        let mut links: Vec<String> = node["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| format!("{} {}", l["relation"], l["node"]["short_id"]))
+            .collect();
+        links.sort();
+        links
+    };
+    assert_eq!(links(&after.0), links(&before.0));
+    assert_eq!(links(&after.1), links(&before.1));
+    assert_eq!(links(&after.1).len(), 3);
+    assert!(sb
+        .ok("alpha", &["recall", "listens"])
+        .stdout
+        .contains(&format!("`{dup}`")));
+
+    // With the flag, a merge across collections keeps the survivor's.
+    sb.ok("alpha", &["merge", &far, &keep, "--cross-collection"]);
+    let merged = sb.ok("alpha", &["--json", "show", &keep]).json();
+    assert_eq!(merged["collection"], "alpha");
+    assert_eq!(merged["body"], "From the config.");
+    let json = sb.ok("alpha", &["--json", "undo", &keep]).json();
+    assert_eq!(json["kind"], "merge");
+    assert_eq!(
+        sb.ok("beta", &["--json", "show", &far]).json()["collection"],
+        "beta"
+    );
+    // A dropped node is not merged.
+    sb.ok("alpha", &["drop", &dup]);
+    assert!(sb
+        .son("alpha", &["merge", &dup, &keep, "--body", "x"])
+        .stderr
+        .contains("is dropped"));
+}
+
 #[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");

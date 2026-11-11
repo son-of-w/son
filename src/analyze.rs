@@ -32,8 +32,8 @@ const TYPE_HINTS: &[(&str, &str)] = &[
     ("facts", "fact"),
     ("note", "note"),
     ("notes", "note"),
-    ("project", "project"),
-    ("projects", "project"),
+    ("collection", "collection"),
+    ("collections", "collection"),
 ];
 
 pub struct Analyzer {

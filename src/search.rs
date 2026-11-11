@@ -256,6 +256,136 @@ fn ranked(
     Ok(hits)
 }
 
+/// An existing node that may hold the same knowledge as a new one.
+pub struct Candidate {
+    pub node: Node,
+    /// From 0 to 1: how alike the two are.
+    pub score: f64,
+    /// Why it is listed, in plain words.
+    pub reasons: Vec<String>,
+}
+
+/// The lowest likeness that is worth showing.
+const DUPLICATE_THRESHOLD: f64 = 0.5;
+
+fn word_set(an: &Analyzer, text: &str) -> Vec<String> {
+    let mut words = an.tokens(text);
+    words.sort();
+    words.dedup();
+    words
+}
+
+fn shared<'a>(a: &'a [String], b: &[String]) -> Vec<&'a str> {
+    a.iter()
+        .filter(|word| b.contains(word))
+        .map(String::as_str)
+        .collect()
+}
+
+/// How alike a new node (`title`, `body`, `kind`) and a stored one are, with
+/// the reasons. Only words are compared: the same words in the title, then
+/// in the body. This finds candidates; it does not decide that two nodes
+/// say the same thing.
+pub fn likeness(
+    an: &Analyzer,
+    title: &str,
+    body: &str,
+    kind: &str,
+    node: &Node,
+) -> (f64, Vec<String>) {
+    let mut reasons = Vec::new();
+    let (new_title, old_title) = (word_set(an, title), word_set(an, &node.title));
+    let common = shared(&new_title, &old_title);
+    let union = new_title.len() + old_title.len() - common.len();
+    let smaller = new_title.len().min(old_title.len());
+    let mut score = if title.trim().eq_ignore_ascii_case(node.title.trim()) {
+        reasons.push("same title".to_string());
+        1.0
+    } else if common.is_empty() || union == 0 {
+        0.0
+    } else {
+        let jaccard = common.len() as f64 / union as f64;
+        // One title that holds all the words of the other, when there are
+        // at least two such words.
+        let contained = if smaller >= 2 && common.len() == smaller {
+            0.85
+        } else {
+            0.0
+        };
+        reasons.push(format!(
+            "title shares {} of {} words: {}",
+            common.len(),
+            union,
+            common.join(", ")
+        ));
+        jaccard.max(contained)
+    };
+    let (new_body, old_body) = (word_set(an, body), word_set(an, &node.body));
+    if !new_body.is_empty() && !old_body.is_empty() {
+        let common = shared(&new_body, &old_body).len();
+        let overlap = common as f64 / new_body.len().min(old_body.len()) as f64;
+        if body.trim() == node.body.trim() {
+            reasons.push("same body".to_string());
+            score = score.max(0.9);
+        } else if overlap >= 0.6 && score >= 0.3 {
+            reasons.push(format!("body shares {common} words"));
+            score = score.max(0.3 + 0.5 * overlap);
+        }
+    }
+    if node.kind != kind {
+        reasons.push(format!("different type ({})", node.kind));
+        score *= 0.8;
+    }
+    (score.min(1.0), reasons)
+}
+
+/// Stored nodes that a new node with this title and body may duplicate,
+/// most alike first. `exclude` leaves one node out (the node itself, when
+/// a stored node is compared with the rest). Reads only.
+pub fn duplicates(
+    conn: &Connection,
+    an: &Analyzer,
+    title: &str,
+    body: &str,
+    kind: &str,
+    exclude: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Candidate>> {
+    let query = an.query(title, &store::synonyms(conn)?);
+    let Some(expression) = query.fts() else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "SELECT {COLS} FROM nodes_fts JOIN nodes n ON n.id = nodes_fts.node_id \
+         LEFT JOIN nodes p ON p.id = n.project_id \
+         WHERE nodes_fts MATCH ?1 AND n.deleted_at IS NULL AND n.type != 'collection' \
+           AND (?2 IS NULL OR n.id != ?2) \
+         ORDER BY bm25(nodes_fts, {WEIGHTS}) LIMIT 50"
+    );
+    let nodes: Vec<Node> = conn
+        .prepare(&sql)?
+        .query_map(params![expression, exclude], store::node_from_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut found: Vec<Candidate> = nodes
+        .into_iter()
+        .filter_map(|node| {
+            let (score, reasons) = likeness(an, title, body, kind, &node);
+            (score >= DUPLICATE_THRESHOLD).then_some(Candidate {
+                node,
+                score,
+                reasons,
+            })
+        })
+        .collect();
+    found.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| b.node.id.cmp(&a.node.id))
+    });
+    found.truncate(limit);
+    Ok(found)
+}
+
 /// Stored words that are a typo away from `stem`. Only for a word the index
 /// does not hold at all: a word that is there is taken to be meant.
 fn fuzzy_terms(conn: &Connection, stem: &str) -> Result<Vec<String>> {

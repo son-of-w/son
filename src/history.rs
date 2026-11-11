@@ -47,6 +47,7 @@ pub fn same_content(a: &Node, b: &Node) -> bool {
         && a.verified_by == b.verified_by
         && a.verified_note == b.verified_note
         && a.refs == b.refs
+        && a.merged_into == b.merged_into
 }
 
 /// Collects what one operation changes, then writes it down. Use inside
@@ -58,6 +59,9 @@ pub struct Recorder<'a> {
     nodes: Vec<(String, Option<Node>)>,
     edges: Vec<EdgeChange>,
     undoes: Option<i64>,
+    /// Nodes that belong in the record even when their content is the same
+    /// after as before.
+    always: Vec<String>,
 }
 
 impl<'a> Recorder<'a> {
@@ -68,7 +72,17 @@ impl<'a> Recorder<'a> {
             nodes: Vec::new(),
             edges: Vec::new(),
             undoes: None,
+            always: Vec::new(),
         }
+    }
+
+    /// Like [`Recorder::touch`], and the node is part of the record even
+    /// if the operation leaves its content the same. A merge uses this for
+    /// the survivor, so that the merge is always in the survivor's history
+    /// and can be undone from it.
+    pub fn touch_always(&mut self, id: &str) -> Result<()> {
+        self.always.push(id.to_string());
+        self.touch(id)
     }
 
     /// Call before changing the node `id`: keeps the node as it is now. For
@@ -153,7 +167,9 @@ impl<'a> Recorder<'a> {
             let Some(after) = store::find_node(self.conn, &id)? else {
                 continue;
             };
-            if before.as_ref().is_some_and(|b| same_content(b, &after)) {
+            if before.as_ref().is_some_and(|b| same_content(b, &after))
+                && !self.always.contains(&id)
+            {
                 continue;
             }
             changed.push((id, before, after));

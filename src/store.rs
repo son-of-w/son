@@ -25,9 +25,10 @@ pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p
     n.source, n.author, n.origin, n.visibility, n.rev, \
     n.evidence, n.verified_at, n.verified_by, n.verified_note, \
     (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
-       FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value))";
+       FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value)), \
+    n.merged_into";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 21;
+pub const NCOLS: usize = 22;
 
 /// How a piece of knowledge was learned. This says where it came from, not
 /// that it is true. A node with none of these has unknown provenance.
@@ -135,6 +136,9 @@ pub struct Node {
     pub verified_note: Option<String>,
     #[serde(default)]
     pub refs: Vec<Ref>,
+    /// For a node that was merged into another: the id of that node.
+    #[serde(default)]
+    pub merged_into: Option<String>,
 }
 
 impl Node {
@@ -191,6 +195,7 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
             .get::<_, Option<String>>(20)?
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default(),
+        merged_into: row.get(21)?,
     })
 }
 
@@ -285,7 +290,7 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
         &format!(
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
              evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
-             deleted_at = ?11, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             deleted_at = ?11, merged_into = ?12, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -298,12 +303,35 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             node.verified_at,
             node.verified_by,
             node.verified_note,
-            node.deleted_at
+            node.deleted_at,
+            node.merged_into
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;
     set_refs(conn, &node.id, &node.refs)?;
     reindex(conn, an, &node.id)
+}
+
+/// The ids of the nodes that were merged into `id`.
+pub fn merged_from(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    let ids = conn
+        .prepare("SELECT id FROM nodes WHERE merged_into = ?1 ORDER BY id")?
+        .query_map([id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// Every link of a node, in both directions, whatever the state of the
+/// node at the other end: (from, relation, to).
+pub fn raw_edges(conn: &Connection, id: &str) -> Result<Vec<(String, String, String)>> {
+    let edges = conn
+        .prepare(
+            "SELECT from_id, relation, to_id FROM edges WHERE from_id = ?1 OR to_id = ?1 \
+             ORDER BY created_at, from_id, to_id, relation",
+        )?
+        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(edges)
 }
 
 pub fn find_project(conn: &Connection, name: &str) -> Result<Option<String>> {
@@ -541,6 +569,10 @@ pub fn restore(conn: &Connection, an: &Analyzer, id: &str) -> Result<()> {
 
 /// Remove a node for good, with its tags and edges.
 pub fn purge(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET merged_into = NULL WHERE merged_into = ?1",
+        [id],
+    )?;
     let children: i64 = conn.query_row(
         "SELECT count(*) FROM nodes WHERE project_id = ?1",
         [id],

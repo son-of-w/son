@@ -160,6 +160,9 @@ pub enum Command {
         /// conversation:<id>, user:<what they said>, other:<text> (may repeat)
         #[arg(long = "ref", value_name = "KIND:VALUE")]
         refs: Vec<String>,
+        /// Save nothing: only list stored nodes that this may duplicate
+        #[arg(long)]
+        check: bool,
     },
     /// Search all collections; the current collection's matches come first
     Recall {
@@ -233,6 +236,29 @@ pub enum Command {
     },
     /// Undo a drop
     Restore { id: String },
+    /// Merge one node into another: <source> is dropped, <survivor> stays
+    ///
+    /// The survivor gets the tags, the evidence references and the links of
+    /// both. When the two bodies differ you must give the merged text with
+    /// --body: son never picks one or joins them. `son undo <survivor>`
+    /// reverses the merge.
+    Merge {
+        /// The node that goes away (it is dropped, and points to the survivor)
+        source: String,
+        /// The node that stays
+        survivor: String,
+        /// The body of the merged node, or "-" to read it from stdin.
+        /// Needed when the two bodies differ
+        #[arg(long)]
+        body: Option<String>,
+        /// The title of the merged node (default: the survivor's)
+        #[arg(long)]
+        title: Option<String>,
+        /// Allow a merge of nodes from two collections; the survivor's
+        /// collection is kept
+        #[arg(long)]
+        cross_collection: bool,
+    },
     /// Show every change to a node and its links, newest first
     History {
         id: String,
@@ -366,6 +392,9 @@ pub enum TodoCommand {
         /// Where the evidence is: <kind>:<value> (may repeat)
         #[arg(long = "ref", value_name = "KIND:VALUE")]
         refs: Vec<String>,
+        /// Save nothing: only list stored todos that this may duplicate
+        #[arg(long)]
+        check: bool,
     },
     /// List open todos for the current collection
     List {

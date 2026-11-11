@@ -48,6 +48,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Verify { .. } => ("verify", true),
         Command::Drop { .. } => ("drop", true),
         Command::Restore { .. } => ("restore", true),
+        Command::Merge { .. } => ("merge", true),
         Command::History { .. } => ("history", false),
         Command::Undo { .. } => ("undo", true),
         Command::Todo { command } => match command {
@@ -91,6 +92,41 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", instructions::skill());
             return Ok(());
         }
+    }
+    // A check promises to change nothing: no database is made or upgraded,
+    // and nothing goes into the activity log.
+    match &cli.command {
+        Command::Remember {
+            check: true,
+            kind,
+            title,
+            body,
+            collection,
+            ..
+        } => {
+            let body = read_body(body.clone())?;
+            return check(*kind, title, &body, collection.as_deref(), cli.json);
+        }
+        Command::Todo {
+            command:
+                TodoCommand::Add {
+                    check: true,
+                    title,
+                    body,
+                    collection,
+                    ..
+                },
+        } => {
+            let body = read_body(body.clone())?;
+            return check(
+                NodeType::Todo,
+                title,
+                &body,
+                collection.as_deref(),
+                cli.json,
+            );
+        }
+        _ => {}
     }
     let started = Instant::now();
     let path = db::path()?;
@@ -165,6 +201,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             link,
             evidence,
             refs,
+            check: _,
         } => {
             let body = read_body(body)?;
             app.remember(&Remember {
@@ -222,6 +259,16 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         } => app.verify(&id, checked.as_deref(), &refs, clear),
         Command::Drop { id, purge } => app.drop_node(&id, purge),
         Command::Restore { id } => app.restore(&id),
+        Command::Merge {
+            source,
+            survivor,
+            body,
+            title,
+            cross_collection,
+        } => {
+            let body = body.map(|b| read_body(Some(b))).transpose()?;
+            app.merge(&source, &survivor, body, title, cross_collection)
+        }
         Command::History {
             id,
             op,
@@ -237,6 +284,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 tag,
                 evidence,
                 refs,
+                check: _,
             } => {
                 let body = read_body(body)?;
                 app.remember(&Remember {
@@ -342,6 +390,29 @@ fn project_name(flag: Option<&str>) -> Result<String> {
         Some(name) => Ok(name.to_string()),
         None => current_project_name(),
     }
+}
+
+/// `son remember --check`: list what a new node may duplicate. Reads only.
+fn check(
+    kind: NodeType,
+    title: &str,
+    body: &str,
+    collection: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        bail!("the title is empty");
+    }
+    let collection = project_name(collection)?;
+    let candidates = match db::open_read_only(&db::path()?)? {
+        Some(conn) if kind != NodeType::Collection => {
+            search::duplicates(&conn, &Analyzer::new(), title, body, kind.as_str(), None, 5)?
+        }
+        _ => Vec::new(),
+    };
+    render::check(kind.as_str(), title, &collection, &candidates, json);
+    Ok(())
 }
 
 fn no_collection(name: &str) -> anyhow::Error {
@@ -649,7 +720,8 @@ impl App {
         self.note_node(&node);
         let edges = store::edges_of(&self.conn, &id)?;
         let newer = store::superseded_by(&self.conn, &id)?;
-        render::show(&node, &edges, newer.as_ref(), self.json);
+        let merged_from = store::merged_from(&self.conn, &id)?;
+        render::show(&node, &edges, newer.as_ref(), &merged_from, self.json);
         Ok(())
     }
 
@@ -847,6 +919,139 @@ impl App {
             Ok(())
         })?;
         render::saved("restored", &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
+    }
+
+    fn merge(
+        &self,
+        source: &str,
+        survivor: &str,
+        body: Option<String>,
+        title: Option<String>,
+        cross_collection: bool,
+    ) -> Result<()> {
+        let source_id = store::resolve_id(&self.conn, source)?;
+        let survivor_id = store::resolve_id(&self.conn, survivor)?;
+        if source_id == survivor_id {
+            bail!("a node cannot be merged into itself");
+        }
+        let title = title.map(|t| t.trim().to_string());
+        if title.as_deref() == Some("") {
+            bail!("the title is empty");
+        }
+        let moved = store::write(&self.conn, || {
+            let source = store::get_node(&self.conn, &source_id)?;
+            let mut survivor = store::get_node(&self.conn, &survivor_id)?;
+            self.note_node(&survivor);
+            for node in [&source, &survivor] {
+                if node.kind == "collection" {
+                    bail!("a collection cannot be merged; move its nodes with `son edit <id> --collection`");
+                }
+                if let Some(into) = &node.merged_into {
+                    bail!(
+                        "`{}` was already merged into `{}`",
+                        node.short(),
+                        store::short_id(into)
+                    );
+                }
+                if node.deleted_at.is_some() {
+                    bail!(
+                        "`{}` is dropped; bring it back with `son restore {}` before a merge",
+                        node.short(),
+                        node.short()
+                    );
+                }
+            }
+            if source.kind != survivor.kind {
+                bail!(
+                    "`{}` is a {} and `{}` is a {}; a merge needs the same type (change one with `son edit <id> --type`)",
+                    source.short(),
+                    source.kind,
+                    survivor.short(),
+                    survivor.kind
+                );
+            }
+            if source.project_id != survivor.project_id && !cross_collection {
+                bail!(
+                    "`{}` is in collection '{}' and `{}` is in '{}'; add --cross-collection to merge them (the survivor stays in '{}')",
+                    source.short(),
+                    source.project_name(),
+                    survivor.short(),
+                    survivor.project_name(),
+                    survivor.project_name()
+                );
+            }
+            // The body: the caller's text, else the one body there is. Two
+            // different bodies are a conflict that only the caller can settle.
+            let (old, new) = (source.body.trim(), survivor.body.trim());
+            survivor.body = match body {
+                Some(text) => text,
+                None if old.is_empty() || old == new => survivor.body.clone(),
+                None if new.is_empty() => source.body.clone(),
+                None => bail!(
+                    "the two bodies differ; give the merged text with --body (\"-\" reads stdin). \
+                     See both with `son show {}` and `son show {}`. Nothing was changed",
+                    source.short(),
+                    survivor.short()
+                ),
+            };
+            if let Some(title) = title {
+                survivor.title = title;
+            }
+            survivor.tags.extend(source.tags.iter().cloned());
+            survivor.tags = store::clean_tags(&survivor.tags);
+            survivor.refs.extend(source.refs.iter().cloned());
+            survivor.refs.sort();
+            survivor.refs.dedup();
+            if survivor.evidence.is_none() {
+                survivor.evidence = source.evidence.clone();
+            }
+
+            let mut rec = Recorder::new(&self.conn, "merge");
+            rec.touch(&source_id)?;
+            rec.touch_always(&survivor_id)?;
+            store::update_node(&self.conn, &self.an, &survivor)?;
+            // Every link of the source moves to the survivor. A link between
+            // the two would point from the survivor to itself: it goes.
+            let mut moved = 0;
+            for (from, relation, to) in store::raw_edges(&self.conn, &source_id)? {
+                rec.unlink(&from, &relation, &to)?;
+                let from = if from == source_id {
+                    &survivor_id
+                } else {
+                    &from
+                };
+                let to = if to == source_id { &survivor_id } else { &to };
+                if from != to && rec.link(from, &relation, to)? {
+                    moved += 1;
+                }
+            }
+            let mut gone = source.clone();
+            gone.merged_into = Some(survivor_id.clone());
+            store::put_snapshot(&self.conn, &self.an, &gone)?;
+            store::soft_drop(&self.conn, &self.an, &source_id)?;
+            rec.finish(&self.meta)?;
+            Ok(moved)
+        })?;
+        let survivor = store::get_node(&self.conn, &survivor_id)?;
+        let source = store::get_node(&self.conn, &source_id)?;
+        if self.json {
+            let mut value = render::node_json(&survivor);
+            value["merged_from"] = json!([source.id]);
+            value["links_moved"] = json!(moved);
+            render::print_json(&value);
+        } else {
+            println!(
+                "merged `{}` into {}",
+                source.short(),
+                render::line(&survivor)
+            );
+            println!(
+                "{moved} link(s) moved. `{}` is dropped and points here. Reverse this with `son undo {}`.",
+                source.short(),
+                survivor.short()
+            );
+        }
         Ok(())
     }
 

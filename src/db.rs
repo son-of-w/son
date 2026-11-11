@@ -3,7 +3,7 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -174,6 +174,12 @@ CREATE INDEX edge_changes_from ON edge_changes(from_id);
 CREATE INDEX edge_changes_to ON edge_changes(to_id);
 ";
 
+/// Version 7: a node that was merged into another keeps the id of the node
+/// that took its place, so that an old id still leads somewhere.
+const SCHEMA_V7: &str = "
+ALTER TABLE nodes ADD COLUMN merged_into TEXT;
+";
+
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
@@ -213,6 +219,27 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "foreign_keys", true)?;
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// Open an existing database for reading only. Nothing is created, changed
+/// or migrated: `None` when there is no database yet (or an empty file).
+/// For commands that promise to change nothing, such as
+/// `son remember --check`.
+pub fn open_read_only(path: &Path) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("cannot open database {}", path.display()))?;
+    conn.busy_timeout(busy_wait())?;
+    match user_version(&conn)? {
+        0 => Ok(None),
+        SCHEMA_VERSION => Ok(Some(conn)),
+        version => bail!(
+            "the database is schema version {version} and this son uses version {SCHEMA_VERSION}. \
+             A read-only command does not upgrade it; run `son init --db-only` once, then try again"
+        ),
+    }
 }
 
 /// How long to wait for another session to finish with the database: ten
@@ -305,6 +332,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         if version < 6 {
             conn.execute_batch(SCHEMA_V6)?;
+        }
+        if version < 7 {
+            conn.execute_batch(SCHEMA_V7)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
