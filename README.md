@@ -16,11 +16,25 @@ One module per service. Remote state in S3 with a DynamoDB lock.
 
 ## Install
 
-macOS only. Download the archive for your Mac from the [releases page](https://github.com/Raxvis/son-of-w/releases), unpack it, and put `son` on your `PATH`:
+`son` runs on macOS, Linux and Windows. Download the archive for your system from the [releases page](https://github.com/Raxvis/son-of-w/releases), unpack it, and put `son` on your `PATH`.
+
+| System | Archive |
+| --- | --- |
+| macOS, Apple silicon | `son-v<version>-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `son-v<version>-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `son-v<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux, ARM64 | `son-v<version>-aarch64-unknown-linux-musl.tar.gz` |
+| Windows, x86-64 | `son-v<version>-x86_64-pc-windows-msvc.zip` |
+
+On macOS and Linux:
 
 ```bash
-tar -xzf son-v*-aarch64-apple-darwin.tar.gz && mv son /usr/local/bin/
+tar -xzf son-v*.tar.gz && sudo mv son /usr/local/bin/
 ```
+
+On Windows, unzip the archive and move `son.exe` to a folder that is on your `PATH`.
+
+The Linux binaries are linked statically, so they run on any distribution. `SHA256SUMS` in each release lists the checksum of every archive.
 
 Or build it from source with Rust. From a clone of this repository:
 
@@ -123,12 +137,14 @@ make check
 
 ### Releasing
 
-Pushing a tag `v<version>` starts the Release workflow, which builds both Mac binaries and publishes a GitHub release. When GitHub Actions is not working, the same release can be made from a Mac:
+Pushing a tag `v<version>` starts the Release workflow. It builds the binaries for macOS, Linux and Windows on GitHub's machines for each system, and publishes a GitHub release only when all of them are uploaded. When GitHub Actions is not working, a release can be made from your own machine:
 
 ```bash
 make publish
 ```
 
-It runs the checks, builds both binaries from the tagged commit, creates and pushes the tag `v<version>` if it is missing, stops any Release workflow run for that tag, and publishes the release with the GitHub CLI (`gh`). It is safe to run again. `make dist` only builds the archives into `dist/`. Both use [scripts/release.sh](scripts/release.sh), the same script the workflow runs.
+It runs the checks, builds the binaries from the tagged commit, creates and pushes the tag `v<version>` if it is missing, stops any Release workflow run for that tag, and publishes the release with the GitHub CLI (`gh`). It is safe to run again. `make dist` only builds the archives into `dist/`. Both use [scripts/release.sh](scripts/release.sh), the same script the workflow runs.
+
+A local release holds only the binaries your machine can build. A Mac builds both Mac binaries. It can also build the Linux binaries if [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) is installed and you run `SON_TARGETS=all make publish`. The Windows binary can only be built on Windows.
 
 [PLAN.md](PLAN.md) holds the design and the plan for version 2 (an optional central store with sync).

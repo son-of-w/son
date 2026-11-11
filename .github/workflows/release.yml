@@ -3,6 +3,10 @@ name: Release
 # Runs when a version tag is pushed, for example:
 #   git tag v0.1.0 && git push origin v0.1.0
 # The tag must match the version in Cargo.toml.
+#
+# Every job calls scripts/release.sh, which can also make a release from
+# your own machine when Actions is not working. Each part is safe to run
+# again, and nothing is public until every file is uploaded.
 
 on:
   push:
@@ -11,39 +15,83 @@ on:
 permissions:
   contents: write
 
+env:
+  TAG: ${{ github.ref_name }}
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  release:
-    name: Build and publish
-    runs-on: macos-latest
-    env:
-      TAG: ${{ github.ref_name }}
+  draft:
+    name: Open a draft release
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - name: Check the tag matches Cargo.toml
         run: |
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
           if [ "v$version" != "$TAG" ]; then
             echo "Tag $TAG does not match Cargo.toml version $version" >&2
             exit 1
           fi
 
+      - name: Open the draft
+        run: bash scripts/release.sh draft
+
+  build:
+    name: Build (${{ matrix.targets }})
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+          - os: ubuntu-latest
+            targets: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            targets: aarch64-unknown-linux-musl
+          - os: windows-latest
+            targets: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup target add ${{ matrix.targets }}
+
+      # The Linux binaries are linked against musl, so one file runs on any
+      # Linux, whatever C library the system has.
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Test
         run: cargo test --locked
 
-      # The same script releases from a Mac when Actions is not working:
-      # see scripts/release.sh. Its publish part is safe to run again.
       - name: Build and package
-        run: scripts/release.sh package
-
-      - name: Publish release
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: scripts/release.sh publish
+          SON_TARGETS: ${{ matrix.targets }}
+        run: bash scripts/release.sh package
+
+      - name: Upload to the draft
+        run: bash scripts/release.sh upload
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Add checksums and make the release public
+        env:
+          SON_REQUIRE_ALL: "true"
+        run: bash scripts/release.sh finish

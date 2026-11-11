@@ -6,8 +6,8 @@ use std::time::Duration;
 const SCHEMA_VERSION: i64 = 3;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
-/// are not used yet; they exist so the version 2 central store needs no
-/// migration of existing data (see PLAN.md, "Sync-ready columns").
+/// prepare for the version 2 central store; `rev` already tracks edits.
+/// See V2.md, "Existing schema foundations".
 const SCHEMA_V1: &str = "
 CREATE TABLE nodes (
     id          TEXT PRIMARY KEY,
@@ -105,14 +105,14 @@ CREATE TABLE events (
 CREATE INDEX events_at ON events(at);
 ";
 
-/// `SON_DB` if set, else `~/.son-of-w/son.db`.
+/// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SON_DB").filter(|p| !p.is_empty()) {
         return Ok(PathBuf::from(p));
     }
-    let home = std::env::var_os("HOME")
-        .context("HOME is not set; set SON_DB to choose a database path")?;
-    Ok(PathBuf::from(home).join(".son-of-w").join("son.db"))
+    let home = crate::agents::home()
+        .context("the home directory is not known; set SON_DB to choose a database path")?;
+    Ok(home.join(".son-of-w").join("son.db"))
 }
 
 /// Open the database, creating and migrating it if needed.

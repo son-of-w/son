@@ -8,7 +8,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 - Write tests for analyzer and ranking changes. `tests/ranking.rs` holds a 50-node corpus with known best answers; `SON_RANK_DEBUG=1 cargo test --test ranking -- --nocapture` prints the scores.
 - Never run `son init` against the real home directory while testing: it writes skills and instruction files such as `~/.claude/CLAUDE.md`. (`son init --list-agents` only reads, and is safe.) Set `HOME` and `SON_DB` to a temporary place, as `tests/cli.rs` does.
 - Version 1 has no network calls. The central store is version 2 (see PLAN.md); do not start it unasked.
-- macOS only.
+- `son` must work on macOS, Linux and Windows. Do not use Unix-only paths or APIs; find the home directory with `agents::home()`. CI runs the checks on all three.
 
 ## Git and GitHub
 
@@ -16,7 +16,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 - Each feature commit also raises the version in `Cargo.toml`. Raise the patch number (0.1.0 to 0.1.1) by default. Raise the minor number (0.1.4 to 0.2.0) only for a large new capability or a change that breaks existing use, such as a removed or renamed command or flag. Then run `cargo build` so `Cargo.lock` carries the new version; CI builds with `--locked` and fails if it does not. Changes to docs only do not raise the version.
 - Stage files by name. Do not use `git add -A`: other sessions may have work in progress in this folder (for example in `TODO.md` or `PLAN.md`), and it is not ours to commit.
 - No Claude or Claude Code attribution anywhere: no `Co-Authored-By` trailer, no "Generated with" line in commits, pull requests, or release notes.
-- Every version bump is a release. After the commit with the new version is pushed, tag it and push the tag: `git tag v<version> && git push origin v<version>`. The tag must match the version in `Cargo.toml`. The Release workflow then tests, builds both Mac binaries, and publishes a GitHub release. Check that the workflow passed; a failed release needs a fix and a new patch version, not a moved tag. If GitHub Actions is not working, run `make publish` on the Mac: it makes the same release with `scripts/release.sh`.
+- Every version bump is a release. After the commit with the new version is pushed, tag it and push the tag: `git tag v<version> && git push origin v<version>`. The tag must match the version in `Cargo.toml`. The Release workflow then tests, builds both Mac binaries, and publishes a GitHub release. Check that the workflow passed; a failed release needs a fix and a new patch version, not a moved tag. If GitHub Actions is not working, run `make publish` on the Mac: it uses the same `scripts/release.sh`, but the release then holds only the binaries the Mac can build (no Windows).
 
 ## Layout
 

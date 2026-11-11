@@ -42,7 +42,8 @@ enum Step {
 fn short(path: &Path) -> String {
     if let Some(home) = agents::home() {
         if let Ok(rest) = path.strip_prefix(&home) {
-            return format!("~/{}", rest.display());
+            // Forward slashes on every system, so the output reads the same.
+            return format!("~/{}", rest.display()).replace('\\', "/");
         }
     }
     path.display().to_string()

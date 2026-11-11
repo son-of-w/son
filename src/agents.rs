@@ -18,6 +18,8 @@ pub enum Dir {
     /// Under the directory named by an environment variable, else under a
     /// default below the home directory: `(variable, default, rest)`.
     Env(&'static str, &'static str, &'static str),
+    /// Under `%APPDATA%` (Windows only; nowhere when it is not set).
+    AppData(&'static str),
     /// A fixed path.
     Abs(&'static str),
 }
@@ -28,8 +30,10 @@ fn var(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The home directory: `HOME`, or `USERPROFILE` on Windows when `HOME` is
+/// not set.
 pub fn home() -> Option<PathBuf> {
-    var("HOME")
+    var("HOME").or_else(|| var("USERPROFILE"))
 }
 
 impl Dir {
@@ -51,6 +55,7 @@ impl Dir {
                     base.join(rest)
                 }
             }
+            Dir::AppData(rest) => var("APPDATA")?.join(rest),
             Dir::Abs(path) => PathBuf::from(path),
         })
     }
@@ -115,7 +120,7 @@ const fn agent(
     }
 }
 
-use Dir::{Abs, Config, Env, Home};
+use Dir::{Abs, AppData, Config, Env, Home};
 
 /// Skills in the shared `.agents/skills` folder of a project.
 const SHARED: &str = ".agents/skills";
@@ -186,7 +191,11 @@ const TABLE: &[Agent] = &[
     agent("qoder", "Qoder", ".qoder/skills", Home(".qoder/skills"), &[Home(".qoder")]),
     agent("qoder-cn", "Qoder CN", ".qoder/skills", Home(".qoder-cn/skills"), &[Home(".qoder-cn")]),
     agent("qwen-code", "Qwen Code", ".qwen/skills", Home(".qwen/skills"), &[Home(".qwen")]),
+    #[cfg(not(windows))]
     agent("reasonix", "Reasonix", ".reasonix/skills", Env("REASONIX_HOME", ".reasonix", "skills"), &[Env("REASONIX_HOME", ".reasonix", "")]),
+    // On Windows, Reasonix lives under %APPDATA%.
+    #[cfg(windows)]
+    agent("reasonix", "Reasonix", ".reasonix/skills", AppData("reasonix/skills"), &[AppData("reasonix")]),
     agent("roo", "Roo Code", ".roo/skills", Home(".roo/skills"), &[Home(".roo")]),
     agent("rovodev", "Rovo Dev", ".rovodev/skills", Home(".rovodev/skills"), &[Home(".rovodev")]),
     agent("sarvam-code", "Sarvam Code", SHARED, Home(".agents/skills"), &[Env("SARVAM_HOME", ".sarvam", "")]),
@@ -198,7 +207,7 @@ const TABLE: &[Agent] = &[
     agent("warp", "Warp", SHARED, Home(".agents/skills"), &[Home(".warp")]),
     agent("windsurf", "Windsurf", ".windsurf/skills", Home(".codeium/windsurf/skills"), &[Home(".codeium/windsurf")]),
     agent("zcode", "ZCode", ".zcode/skills", Home(".zcode/skills"), &[Home(".zcode"), Abs("/Applications/ZCode.app")]),
-    agent("zed", "Zed", SHARED, Home(".agents/skills"), &[Config("zed")]),
+    agent("zed", "Zed", SHARED, Home(".agents/skills"), &[Config("zed"), AppData("Zed")]),
     agent("zencoder", "Zencoder", ".zencoder/skills", Home(".zencoder/skills"), &[Home(".zencoder")]),
     agent("zenflow", "Zenflow", ".zencoder/skills", Home(".zencoder/skills"), &[Home(".zencoder")]),
 ];

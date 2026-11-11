@@ -12,16 +12,24 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
-    name: Test and build (macOS)
-    runs-on: macos-latest
+    name: Test and build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
           rustup default stable
 
       - name: Format
@@ -36,9 +44,12 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      # A convenience only: a fault in GitHub's artifact service must not
+      # turn a good build red.
       - name: Upload binary
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: son-macos-arm64
-          path: target/release/son
+          name: son-${{ matrix.os }}
+          path: target/release/son${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error

@@ -1,0 +1,2 @@
+# Text files use LF on every system, so formatting checks and tests agree.
+* text=auto eol=lf
