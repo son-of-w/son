@@ -12,6 +12,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 
 ## Git and GitHub
 
+- After each feature is implemented and `make check` passes, commit it and push to `main` without asking. Do not push a state that fails the checks.
 - No Claude or Claude Code attribution anywhere: no `Co-Authored-By` trailer, no "Generated with" line in commits, pull requests, or release notes.
 - A release is made only when William asks for one. To release: set the version in `Cargo.toml`, commit, then push a tag `v<version>`. The Release workflow builds both Mac binaries and publishes them.
 
