@@ -54,6 +54,8 @@ impl Corpus {
                 status: (kind == "todo").then_some("open"),
                 project_id: Some(&project_id),
                 tags: &tags,
+                evidence: None,
+                refs: &[],
             },
         )
         .unwrap()

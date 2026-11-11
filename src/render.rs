@@ -46,6 +46,29 @@ fn first_line(text: &str) -> &str {
         .unwrap_or("")
 }
 
+/// How far a node can be trusted, in a few words: how it was learned and
+/// whether it was checked. Empty when neither is known.
+pub fn trust(node: &Node) -> Vec<String> {
+    let mut parts = Vec::new();
+    if node.evidence.is_some() {
+        parts.push(crate::store::evidence_label(node.evidence.as_deref()).to_string());
+    }
+    if let Some(when) = &node.verified_at {
+        parts.push(format!("verified {}", date(when)));
+    }
+    parts
+}
+
+/// [`trust`] as a suffix for a one-line summary.
+fn trust_suffix(node: &Node) -> String {
+    let parts = trust(node);
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", parts.join(", "))
+    }
+}
+
 fn tags(node: &Node) -> String {
     node.tags.iter().map(|t| format!(" #{t}")).collect()
 }
@@ -107,6 +130,20 @@ pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: boo
         date(&node.updated_at),
         node.id.to_lowercase()
     );
+    let verified = match (&node.verified_at, &node.verified_by) {
+        (Some(when), Some(by)) => format!("verified {} by {by}", date(when)),
+        (Some(when), None) => format!("verified {}", date(when)),
+        (None, _) => "not verified".to_string(),
+    };
+    if node.kind != "project" {
+        println!(
+            "evidence: {} · {verified}",
+            crate::store::evidence_label(node.evidence.as_deref())
+        );
+        if let Some(note) = node.verified_note.as_deref().filter(|n| !n.is_empty()) {
+            println!("checked: {note}");
+        }
+    }
     if let Some(when) = &node.deleted_at {
         println!(
             "DROPPED {} (bring it back with `son restore {}`)",
@@ -119,6 +156,12 @@ pub fn show(node: &Node, edges: &[Edge], superseded_by: Option<&Node>, json: boo
     }
     if !node.body.trim().is_empty() {
         println!("\n{}", node.body.trim());
+    }
+    if !node.refs.is_empty() {
+        println!("\n## Evidence");
+        for r in &node.refs {
+            println!("- {}: {}", r.kind, r.value);
+        }
     }
     if !edges.is_empty() {
         println!("\n## Links");
@@ -177,6 +220,7 @@ pub fn recall(terms: &str, current_project: &str, result: &Recall, json: bool) {
             facts.push(format!("tags: {}", node.tags.join(", ")));
         }
         facts.push(format!("updated {}", date(&node.updated_at)));
+        facts.extend(trust(node));
         if hit.close {
             facts.push("close match".to_string());
         }
@@ -306,7 +350,13 @@ pub fn context(ctx: &Context, json: bool) {
     if !ctx.patterns.is_empty() {
         println!("\n## Patterns (how we set things up)");
         for node in &ctx.patterns {
-            println!("\n### `{}` {}{}", node.short(), node.title, tags(node));
+            println!(
+                "\n### `{}` {}{}{}",
+                node.short(),
+                node.title,
+                tags(node),
+                trust_suffix(node)
+            );
             if !node.body.trim().is_empty() {
                 println!("{}", clip(&node.body, 600));
             }
@@ -315,13 +365,20 @@ pub fn context(ctx: &Context, json: bool) {
     let summary = |node: &Node| {
         let detail = clip(first_line(&node.body), 200);
         if detail.is_empty() {
-            format!("- `{}` {}{}", node.short(), node.title, tags(node))
-        } else {
             format!(
-                "- `{}` {}: {detail}{}",
+                "- `{}` {}{}{}",
                 node.short(),
                 node.title,
-                tags(node)
+                tags(node),
+                trust_suffix(node)
+            )
+        } else {
+            format!(
+                "- `{}` {}: {detail}{}{}",
+                node.short(),
+                node.title,
+                tags(node),
+                trust_suffix(node)
             )
         }
     };

@@ -3,10 +3,12 @@
 use crate::activity::{self, Draft, EventFilter, NodeFilter};
 use crate::agents::Scope;
 use crate::analyze::Analyzer;
-use crate::cli::{Cli, Command, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand};
+use crate::cli::{
+    Cli, Command, Evidence, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand,
+};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
-use crate::store::{self, Meta, NewNode, Node, TODO_STATUSES};
+use crate::store::{self, Meta, NewNode, Node, Ref, TODO_STATUSES};
 use crate::{db, instructions, project, report, setup, transfer};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
@@ -42,6 +44,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Recall { .. } => ("recall", false),
         Command::Show { .. } => ("show", false),
         Command::Edit { .. } => ("edit", true),
+        Command::Verify { .. } => ("verify", true),
         Command::Drop { .. } => ("drop", true),
         Command::Restore { .. } => ("restore", true),
         Command::Todo { command } => match command {
@@ -157,9 +160,20 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             project,
             tag,
             link,
+            evidence,
+            refs,
         } => {
             let body = read_body(body)?;
-            app.remember(kind, &title, &body, project.as_deref(), &tag, &link)
+            app.remember(&Remember {
+                kind,
+                title: &title,
+                body: &body,
+                project: project.as_deref(),
+                tags: &tag,
+                links: &link,
+                evidence,
+                refs: &refs,
+            })
         }
         Command::Recall {
             query,
@@ -177,10 +191,32 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             status,
             project,
             tag,
+            evidence,
+            refs,
+            unref,
         } => {
             let body = body.map(|b| read_body(Some(b))).transpose()?;
-            app.edit(&id, title, body, kind, status, project, tag)
+            app.edit(
+                &id,
+                Edit {
+                    title,
+                    body,
+                    kind,
+                    status,
+                    project,
+                    tags: tag,
+                    evidence,
+                    refs,
+                    unref,
+                },
+            )
         }
+        Command::Verify {
+            id,
+            checked,
+            refs,
+            clear,
+        } => app.verify(&id, checked.as_deref(), &refs, clear),
         Command::Drop { id, purge } => app.drop_node(&id, purge),
         Command::Restore { id } => app.restore(&id),
         Command::Todo { command } => match command {
@@ -189,9 +225,20 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 body,
                 project,
                 tag,
+                evidence,
+                refs,
             } => {
                 let body = read_body(body)?;
-                app.remember(NodeType::Todo, &title, &body, project.as_deref(), &tag, &[])
+                app.remember(&Remember {
+                    kind: NodeType::Todo,
+                    title: &title,
+                    body: &body,
+                    project: project.as_deref(),
+                    tags: &tag,
+                    links: &[],
+                    evidence,
+                    refs: &refs,
+                })
             }
             TodoCommand::List { project, all, done } => {
                 app.todo_list(project.as_deref(), all, done)
@@ -295,6 +342,35 @@ fn parse_link(text: &str) -> Result<(&str, Relation)> {
     Ok((id, relation))
 }
 
+/// What `son remember` and `son todo add` were given.
+struct Remember<'a> {
+    kind: NodeType,
+    title: &'a str,
+    body: &'a str,
+    project: Option<&'a str>,
+    tags: &'a [String],
+    links: &'a [String],
+    evidence: Option<Evidence>,
+    refs: &'a [String],
+}
+
+/// What `son edit` was asked to change.
+struct Edit {
+    title: Option<String>,
+    body: Option<String>,
+    kind: Option<NodeType>,
+    status: Option<String>,
+    project: Option<String>,
+    tags: Option<Vec<String>>,
+    evidence: Option<Evidence>,
+    refs: Vec<String>,
+    unref: Vec<String>,
+}
+
+fn parse_refs(texts: &[String]) -> Result<Vec<Ref>> {
+    texts.iter().map(|text| store::parse_ref(text)).collect()
+}
+
 impl App {
     /// Add to what the activity log will say about this command.
     fn note(&self, fill: impl FnOnce(&mut Draft)) {
@@ -389,19 +465,21 @@ impl App {
         Ok(())
     }
 
-    fn remember(
-        &self,
-        kind: NodeType,
-        title: &str,
-        body: &str,
-        project: Option<&str>,
-        tags: &[String],
-        links: &[String],
-    ) -> Result<()> {
-        let title = title.trim();
+    fn remember(&self, new: &Remember) -> Result<()> {
+        let Remember {
+            kind,
+            body,
+            project,
+            tags,
+            links,
+            ..
+        } = *new;
+        let title = new.title.trim();
         if title.is_empty() {
             bail!("the title is empty");
         }
+        let evidence = new.evidence.and_then(Evidence::stored);
+        let refs = parse_refs(new.refs)?;
         let id = store::write(&self.conn, || {
             let id = if kind == NodeType::Project {
                 if project.is_some() {
@@ -413,7 +491,16 @@ impl App {
                         store::short_id(&existing)
                     );
                 }
-                self.insert(kind, title, body, None, None, tags)?
+                self.insert(&NewNode {
+                    kind: kind.as_str(),
+                    title,
+                    body,
+                    status: None,
+                    project_id: None,
+                    tags,
+                    evidence,
+                    refs: &refs,
+                })?
             } else {
                 let project_id = store::ensure_project(
                     &self.conn,
@@ -421,8 +508,16 @@ impl App {
                     &self.meta,
                     &project_name(project)?,
                 )?;
-                let status = (kind == NodeType::Todo).then_some("open");
-                self.insert(kind, title, body, status, Some(&project_id), tags)?
+                self.insert(&NewNode {
+                    kind: kind.as_str(),
+                    title,
+                    body,
+                    status: (kind == NodeType::Todo).then_some("open"),
+                    project_id: Some(&project_id),
+                    tags,
+                    evidence,
+                    refs: &refs,
+                })?
             };
             for link in links {
                 let (target, relation) = parse_link(link)?;
@@ -437,28 +532,41 @@ impl App {
         Ok(())
     }
 
-    fn insert(
-        &self,
-        kind: NodeType,
-        title: &str,
-        body: &str,
-        status: Option<&str>,
-        project_id: Option<&str>,
-        tags: &[String],
-    ) -> Result<String> {
-        store::insert_node(
-            &self.conn,
-            &self.an,
-            &self.meta,
-            &NewNode {
-                kind: kind.as_str(),
-                title,
-                body,
-                status,
-                project_id,
-                tags,
-            },
-        )
+    fn insert(&self, new: &NewNode) -> Result<String> {
+        store::insert_node(&self.conn, &self.an, &self.meta, new)
+    }
+
+    fn verify(&self, id: &str, checked: Option<&str>, refs: &[String], clear: bool) -> Result<()> {
+        let id = store::resolve_id(&self.conn, id)?;
+        let added = parse_refs(refs)?;
+        let checked = checked.map(str::trim).unwrap_or("");
+        if !clear && checked.is_empty() {
+            bail!("say what you checked: --checked \"<what you looked at and what it showed>\"");
+        }
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        if node.kind == "project" {
+            bail!("a project is a container; verify the nodes in it");
+        }
+        store::write(&self.conn, || {
+            if clear {
+                return store::unverify(&self.conn, &id);
+            }
+            if !added.is_empty() {
+                let mut refs = node.refs.clone();
+                refs.extend(added.iter().cloned());
+                store::set_refs(&self.conn, &id, &refs)?;
+            }
+            let by = self.meta.source.as_deref().or(self.meta.author.as_deref());
+            store::verify(&self.conn, &id, by, checked)
+        })?;
+        let verb = if clear {
+            "verification removed from"
+        } else {
+            "verified"
+        };
+        render::saved(verb, &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
     }
 
     fn recall(
@@ -512,26 +620,34 @@ impl App {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn edit(
-        &self,
-        id: &str,
-        title: Option<String>,
-        body: Option<String>,
-        kind: Option<NodeType>,
-        status: Option<String>,
-        project: Option<String>,
-        tags: Option<Vec<String>>,
-    ) -> Result<()> {
+    fn edit(&self, id: &str, edit: Edit) -> Result<()> {
+        let Edit {
+            title,
+            body,
+            kind,
+            status,
+            project,
+            tags,
+            evidence,
+            refs,
+            unref,
+        } = edit;
         if title.is_none()
             && body.is_none()
             && kind.is_none()
             && status.is_none()
             && project.is_none()
             && tags.is_none()
+            && evidence.is_none()
+            && refs.is_empty()
+            && unref.is_empty()
         {
-            bail!("nothing to change; give --title, --body, --type, --status, --project or --tag");
+            bail!(
+                "nothing to change; give --title, --body, --type, --status, --project, --tag, \
+                 --evidence, --ref or --unref"
+            );
         }
+        let (refs, unref) = (parse_refs(&refs)?, parse_refs(&unref)?);
         let id = store::resolve_id(&self.conn, id)?;
         store::write(&self.conn, || {
             let mut node = store::get_node(&self.conn, &id)?;
@@ -587,6 +703,21 @@ impl App {
             if let Some(tags) = tags {
                 node.tags = tags;
             }
+            if let Some(evidence) = evidence {
+                node.evidence = evidence.stored().map(str::to_string);
+            }
+            for gone in &unref {
+                if !node.refs.contains(gone) {
+                    bail!(
+                        "`{}` has no reference {}:{}",
+                        node.short(),
+                        gone.kind,
+                        gone.value
+                    );
+                }
+            }
+            node.refs.retain(|r| !unref.contains(r));
+            node.refs.extend(refs.iter().cloned());
             store::update_node(&self.conn, &self.an, &node)
         })?;
         let node = store::get_node(&self.conn, &id)?;

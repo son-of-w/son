@@ -3,7 +3,7 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -103,6 +103,25 @@ CREATE TABLE events (
     error    TEXT
 );
 CREATE INDEX events_at ON events(at);
+";
+
+/// Version 4 adds provenance. `evidence` says how the knowledge was learned
+/// (NULL means unknown, which is what every older node is). `refs` holds
+/// pointers to the evidence: son stores them and never opens them. The
+/// `verified_*` columns record an explicit check, apart from `updated_at`:
+/// an edit is not a verification.
+const SCHEMA_V4: &str = "
+ALTER TABLE nodes ADD COLUMN evidence TEXT;
+ALTER TABLE nodes ADD COLUMN verified_at TEXT;
+ALTER TABLE nodes ADD COLUMN verified_by TEXT;
+ALTER TABLE nodes ADD COLUMN verified_note TEXT;
+CREATE TABLE refs (
+    node_id     TEXT NOT NULL REFERENCES nodes(id),
+    kind        TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (node_id, kind, value)
+);
 ";
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
@@ -228,6 +247,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         if version < 3 {
             conn.execute_batch(SCHEMA_V3)?;
         }
+        if version < 4 {
+            conn.execute_batch(SCHEMA_V4)?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     })();
@@ -287,6 +309,11 @@ mod tests {
             .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(events, 0);
+        // An older node has unknown provenance and is not verified.
+        let node = crate::store::get_node(&conn, "01X").unwrap();
+        assert_eq!(node.evidence, None);
+        assert_eq!(node.verified_at, None);
+        assert!(node.refs.is_empty());
     }
 
     #[test]

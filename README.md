@@ -97,6 +97,7 @@ son init --yes
 - **Search uses no model.** Text is split (including `camelCase` and `snake_case`), stop words are removed, words are stemmed, and synonyms such as `tf` → `terraform` are applied to the query. Ranking is BM25 with adjustments for title and tag matches, node type, recency and superseded decisions.
 - **Near misses still match.** When the exact words find too few nodes, recall also takes the start of a word (`terra` finds `terraform`) and typos (`terrafrom` finds `terraform`). These are marked `close match` and listed after exact matches.
 - **Links connect nodes.** `son link <from> <relation> <to>` with `relates_to`, `supersedes`, `depends_on`, `derived_from` or `belongs_to`. Recall follows links one hop (or two) from its matches. A superseded decision is kept and ranked lower.
+- **Every node can say where it came from.** `--evidence` records how it was learned: `user-statement`, `observation` or `inference`; without it the node is "unknown". `--ref <kind>:<value>` points at the evidence (`file`, `url`, `conversation`, `user`, `other`); `son` stores the pointer and never opens it. `son verify <id> --checked "<what was checked>"` records an explicit check, with its own date. An edit never marks a node verified. These fields describe recorded evidence; `son` does not test whether a node is true.
 - **Nothing is lost by default.** `son drop` is a soft delete; `son restore` brings a node back.
 
 ## Commands
@@ -104,9 +105,11 @@ son init --yes
 ```
 son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
 son remember <type> "<title>" [--body <text>|-] [--project <name>] [--tag a,b] [--link <id>:<relation>]
+                              [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
 son recall <terms...> [--type <type>] [--project <name>] [--limit 5] [--hops 1]
 son show <id>
-son edit <id> [--title] [--body] [--type] [--status] [--project] [--tag]
+son edit <id> [--title] [--body] [--type] [--status] [--project] [--tag] [--evidence] [--ref] [--unref]
+son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
 son drop <id> [--purge]
 son restore <id>
 son todo add "<title>" [--project <name>] [--tag a,b]

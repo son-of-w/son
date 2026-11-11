@@ -41,6 +41,32 @@ impl NodeType {
     }
 }
 
+/// How a piece of knowledge was learned.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Evidence {
+    /// The user said it
+    #[value(name = "user-statement", alias = "user_statement", alias = "user")]
+    UserStatement,
+    /// The agent saw it: in a file, in command output, on a page
+    Observation,
+    /// The agent concluded it from other things
+    Inference,
+    /// Not known (what every node is until it is classified)
+    Unknown,
+}
+
+impl Evidence {
+    /// The stored value; `None` for unknown.
+    pub fn stored(self) -> Option<&'static str> {
+        match self {
+            Evidence::UserStatement => Some("user_statement"),
+            Evidence::Observation => Some("observation"),
+            Evidence::Inference => Some("inference"),
+            Evidence::Unknown => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ScopeArg {
     Global,
@@ -126,6 +152,13 @@ pub enum Command {
         /// Link the new node to another: <id>:<relation> (may repeat)
         #[arg(long, value_name = "ID:RELATION")]
         link: Vec<String>,
+        /// How this was learned
+        #[arg(long, value_enum)]
+        evidence: Option<Evidence>,
+        /// Where the evidence is: file:<path>, url:<address>,
+        /// conversation:<id>, user:<what they said>, other:<text> (may repeat)
+        #[arg(long = "ref", value_name = "KIND:VALUE")]
+        refs: Vec<String>,
     },
     /// Search all projects; the current project's matches come first
     Recall {
@@ -164,6 +197,31 @@ pub enum Command {
         /// Replace the tags (comma-separated; "" clears them)
         #[arg(long, value_delimiter = ',')]
         tag: Option<Vec<String>>,
+        /// How this was learned
+        #[arg(long, value_enum)]
+        evidence: Option<Evidence>,
+        /// Add a reference to evidence: <kind>:<value> (may repeat)
+        #[arg(long = "ref", value_name = "KIND:VALUE")]
+        refs: Vec<String>,
+        /// Remove a reference to evidence: <kind>:<value> (may repeat)
+        #[arg(long, value_name = "KIND:VALUE")]
+        unref: Vec<String>,
+    },
+    /// Record that you checked a node against its evidence
+    ///
+    /// Say what you checked with --checked. Reading a node again, or
+    /// editing it, is not a check.
+    Verify {
+        id: String,
+        /// What you checked, for example "read Cargo.toml: version is 0.2.0"
+        #[arg(long, required_unless_present = "clear")]
+        checked: Option<String>,
+        /// Add a reference to the evidence you checked (may repeat)
+        #[arg(long = "ref", value_name = "KIND:VALUE")]
+        refs: Vec<String>,
+        /// Take the verification away
+        #[arg(long, conflicts_with_all = ["checked", "refs"])]
+        clear: bool,
     },
     /// Delete a node (it can be restored unless --purge is given)
     Drop {
@@ -277,6 +335,12 @@ pub enum TodoCommand {
         /// Comma-separated tags
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+        /// How this was learned
+        #[arg(long, value_enum)]
+        evidence: Option<Evidence>,
+        /// Where the evidence is: <kind>:<value> (may repeat)
+        #[arg(long = "ref", value_name = "KIND:VALUE")]
+        refs: Vec<String>,
     },
     /// List open todos for the current project
     List {

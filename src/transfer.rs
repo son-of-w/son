@@ -111,6 +111,7 @@ pub fn markdown(dump: &Dump) -> String {
                 facts.push(format!("tags: {}", node.tags.join(", ")));
             }
             facts.push(format!("updated: {}", node.updated_at));
+            facts.extend(crate::render::trust(node));
             let _ = writeln!(out, "{}", facts.join(" · "));
             if !node.body.trim().is_empty() {
                 let _ = writeln!(out, "\n{}", node.body.trim());
@@ -126,6 +127,9 @@ pub fn markdown(dump: &Dump) -> String {
                 .collect();
             if !links.is_empty() {
                 let _ = writeln!(out, "\n{}", links.join("\n"));
+            }
+            for r in &node.refs {
+                let _ = writeln!(out, "- evidence {}: {}", r.kind, r.value);
             }
         }
     }
@@ -180,7 +184,26 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
             }
             match stored_updated_at(conn, &node.id)? {
                 Some(stored) if stored >= node.updated_at => {
-                    stats.unchanged += 1;
+                    // The content here is as new or newer. A verification
+                    // is apart from the content: take it when it is newer,
+                    // and keep every reference to evidence from both.
+                    let newer_check = conn.execute(
+                        "UPDATE nodes SET verified_at = ?2, verified_by = ?3, verified_note = ?4 \
+                         WHERE id = ?1 AND ?2 IS NOT NULL AND (verified_at IS NULL OR verified_at < ?2)",
+                        params![node.id, node.verified_at, node.verified_by, node.verified_note],
+                    )?;
+                    let mut new_refs = 0;
+                    for r in &node.refs {
+                        new_refs += conn.execute(
+                            "INSERT OR IGNORE INTO refs (node_id, kind, value, created_at) VALUES (?1, ?2, ?3, ?4)",
+                            params![node.id, r.kind, r.value, node.updated_at],
+                        )?;
+                    }
+                    if newer_check + new_refs > 0 {
+                        stats.updated += 1;
+                    } else {
+                        stats.unchanged += 1;
+                    }
                     continue;
                 }
                 Some(_) => stats.updated += 1,
@@ -189,15 +212,18 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
             let project_id = node.project_id.as_deref().map(mapped);
             conn.execute(
                 "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, \
-                                    deleted_at, source, origin, author, visibility, rev) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+                                    deleted_at, source, origin, author, visibility, rev, \
+                                    evidence, verified_at, verified_by, verified_note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
                  ON CONFLICT(id) DO UPDATE SET \
                     type = excluded.type, title = excluded.title, body = excluded.body, \
                     status = excluded.status, project_id = excluded.project_id, \
                     created_at = excluded.created_at, updated_at = excluded.updated_at, \
                     deleted_at = excluded.deleted_at, source = excluded.source, \
                     origin = excluded.origin, author = excluded.author, \
-                    visibility = excluded.visibility, rev = excluded.rev",
+                    visibility = excluded.visibility, rev = excluded.rev, \
+                    evidence = excluded.evidence, verified_at = excluded.verified_at, \
+                    verified_by = excluded.verified_by, verified_note = excluded.verified_note",
                 params![
                     node.id,
                     node.kind,
@@ -212,10 +238,15 @@ pub fn import(conn: &Connection, an: &Analyzer, dump: &Dump) -> Result<ImportSta
                     node.origin,
                     node.author,
                     node.visibility,
-                    node.rev
+                    node.rev,
+                    node.evidence,
+                    node.verified_at,
+                    node.verified_by,
+                    node.verified_note
                 ],
             )?;
             store::set_tags(conn, &node.id, &node.tags)?;
+            store::set_refs(conn, &node.id, &node.refs)?;
             store::reindex(conn, an, &node.id)?;
         }
 

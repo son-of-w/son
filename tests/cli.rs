@@ -587,6 +587,181 @@ fn export_and_import_round_trip() {
 }
 
 #[test]
+fn provenance_is_recorded_and_verification_is_explicit() {
+    let sb = Sandbox::new("provenance");
+    let plain = sb
+        .ok("alpha", &["remember", "fact", "Plain widget fact"])
+        .id();
+    let said = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "decision",
+                "Widgets ship on Fridays",
+                "--evidence",
+                "user",
+                "--ref",
+                "user:William said so on 2026-11-11",
+                "--ref",
+                "https://example.invalid/policy",
+            ],
+        )
+        .id();
+    let guessed = sb
+        .ok(
+            "alpha",
+            &[
+                "remember",
+                "fact",
+                "Widget cache is probably Redis",
+                "--evidence",
+                "inference",
+                "--ref",
+                "file:src/cache.rs",
+            ],
+        )
+        .id();
+
+    // An older or unclassified node: unknown, and nothing is implied.
+    let shown = sb.ok("alpha", &["show", &plain]).stdout;
+    assert!(
+        shown.contains("evidence: unknown · not verified"),
+        "{shown}"
+    );
+    let json = sb.ok("alpha", &["--json", "show", &plain]).json();
+    assert!(json["evidence"].is_null() && json["verified_at"].is_null());
+    assert_eq!(json["refs"].as_array().unwrap().len(), 0);
+
+    // A user statement and an inference stay apart.
+    let shown = sb.ok("alpha", &["show", &said]).stdout;
+    assert!(
+        shown.contains("evidence: user statement · not verified"),
+        "{shown}"
+    );
+    assert!(shown.contains("- user: William said so on 2026-11-11"));
+    assert!(shown.contains("- url: https://example.invalid/policy"));
+    let recall = sb.ok("alpha", &["recall", "widget"]).stdout;
+    assert!(recall.contains("· inference"), "{recall}");
+    assert!(recall.contains("· user statement"), "{recall}");
+    assert!(!recall.contains("unknown"), "{recall}");
+    assert!(!recall.contains("verified"), "{recall}");
+
+    // An edit, of content or of evidence, never verifies.
+    sb.ok(
+        "alpha",
+        &["edit", &guessed, "--body", "Seen in the config."],
+    );
+    sb.ok(
+        "alpha",
+        &[
+            "edit",
+            &guessed,
+            "--evidence",
+            "observation",
+            "--ref",
+            "file:config/cache.toml",
+            "--unref",
+            "file:src/cache.rs",
+        ],
+    );
+    let json = sb.ok("alpha", &["--json", "show", &guessed]).json();
+    assert_eq!(json["evidence"], "observation");
+    assert!(json["verified_at"].is_null());
+    assert_eq!(
+        json["refs"],
+        serde_json::json!([{ "kind": "file", "value": "config/cache.toml" }])
+    );
+    assert!(
+        !sb.son("alpha", &["edit", &guessed, "--unref", "file:nope"])
+            .ok
+    );
+    assert!(!sb.son("alpha", &["edit", &guessed, "--ref", "nonsense"]).ok);
+
+    // Verifying needs a statement of what was checked.
+    assert!(!sb.son("alpha", &["verify", &guessed]).ok);
+    assert!(!sb.son("alpha", &["verify", &guessed, "--checked", " "]).ok);
+    let before = sb.ok("alpha", &["--json", "show", &guessed]).json();
+    sb.command(
+        "alpha",
+        &[
+            "verify",
+            &guessed,
+            "--checked",
+            "read config/cache.toml: backend = redis",
+            "--ref",
+            "file:config/cache.toml",
+        ],
+    )
+    .env("SON_SOURCE", "session-7")
+    .output()
+    .unwrap();
+    let after = sb.ok("alpha", &["--json", "show", &guessed]).json();
+    assert!(after["verified_at"].is_string());
+    assert_eq!(after["verified_by"], "session-7");
+    assert_eq!(
+        after["verified_note"],
+        "read config/cache.toml: backend = redis"
+    );
+    // Verification is apart from the edit time.
+    assert_eq!(after["updated_at"], before["updated_at"]);
+    let shown = sb.ok("alpha", &["show", &guessed]).stdout;
+    assert!(shown.contains("by session-7") && shown.contains("checked: read config/cache.toml"));
+    assert!(sb
+        .ok("alpha", &["recall", "widget", "cache"])
+        .stdout
+        .contains("· observation · verified "));
+    assert!(sb
+        .ok("alpha", &["context"])
+        .stdout
+        .contains("[observation, verified "));
+
+    // A later edit keeps the verification as it was; --clear removes it.
+    sb.ok(
+        "alpha",
+        &["edit", &guessed, "--title", "Widget cache is Redis"],
+    );
+    let edited = sb.ok("alpha", &["--json", "show", &guessed]).json();
+    assert_eq!(edited["verified_at"], after["verified_at"]);
+
+    // Export and import keep all of it.
+    let file = sb.root.join("dump.json");
+    std::fs::write(&file, sb.ok("alpha", &["export", "--json"]).stdout).unwrap();
+    let other = Sandbox::new("provenance-target");
+    other.ok("alpha", &["import", file.to_str().unwrap()]);
+    let copy = other.ok("alpha", &["--json", "show", &guessed]).json();
+    for field in [
+        "evidence",
+        "verified_at",
+        "verified_by",
+        "verified_note",
+        "refs",
+    ] {
+        assert_eq!(copy[field], edited[field], "{field}");
+    }
+    let copy = other.ok("alpha", &["--json", "show", &said]).json();
+    assert_eq!(copy["evidence"], "user_statement");
+    assert_eq!(copy["refs"].as_array().unwrap().len(), 2);
+
+    // A newer verification comes across even when the content is the same.
+    sb.ok(
+        "alpha",
+        &["verify", &said, "--checked", "asked William again"],
+    );
+    std::fs::write(&file, sb.ok("alpha", &["export", "--json"]).stdout).unwrap();
+    let stats = other
+        .ok("alpha", &["--json", "import", file.to_str().unwrap()])
+        .json();
+    assert_eq!(stats["updated"], 1, "{stats}");
+    let copy = other.ok("alpha", &["--json", "show", &said]).json();
+    assert_eq!(copy["verified_note"], "asked William again");
+
+    sb.ok("alpha", &["verify", &said, "--clear"]);
+    let cleared = sb.ok("alpha", &["--json", "show", &said]).json();
+    assert!(cleared["verified_at"].is_null() && cleared["verified_note"].is_null());
+}
+
+#[test]
 fn an_instruction_like_note_is_stored_and_recalled_as_plain_content() {
     let sb = Sandbox::new("instruction-like");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eval");

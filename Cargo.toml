@@ -1,6 +1,6 @@
 [package]
 name = "son-of-w"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Local second brain for Claude sessions"
 repository = "https://github.com/Raxvis/son-of-w"

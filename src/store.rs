@@ -22,9 +22,60 @@ pub const RELATIONS: [&str; 5] = [
 pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p.title, \
     n.created_at, n.updated_at, n.deleted_at, \
     (SELECT group_concat(tag, ',') FROM tags WHERE node_id = n.id), \
-    n.source, n.author, n.origin, n.visibility, n.rev";
+    n.source, n.author, n.origin, n.visibility, n.rev, \
+    n.evidence, n.verified_at, n.verified_by, n.verified_note, \
+    (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
+       FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value))";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 16;
+pub const NCOLS: usize = 21;
+
+/// How a piece of knowledge was learned. This says where it came from, not
+/// that it is true. A node with none of these has unknown provenance.
+pub const EVIDENCE: [&str; 3] = ["user_statement", "observation", "inference"];
+/// What a reference to evidence can point at.
+pub const REF_KINDS: [&str; 5] = ["file", "url", "conversation", "user", "other"];
+
+/// A pointer to evidence. son stores it; it never opens the file or the URL.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Ref {
+    pub kind: String,
+    pub value: String,
+}
+
+/// `<kind>:<value>` from `--ref`. A bare web address is a `url`.
+pub fn parse_ref(text: &str) -> Result<Ref> {
+    let text = text.trim();
+    if text.starts_with("http://") || text.starts_with("https://") {
+        return Ok(Ref {
+            kind: "url".to_string(),
+            value: text.to_string(),
+        });
+    }
+    if let Some((kind, value)) = text.split_once(':') {
+        let (kind, value) = (kind.trim().to_lowercase(), value.trim());
+        if REF_KINDS.contains(&kind.as_str()) && !value.is_empty() {
+            return Ok(Ref {
+                kind,
+                value: value.to_string(),
+            });
+        }
+    }
+    bail!(
+        "'{text}' is not a reference; use <kind>:<value> where kind is one of: {} \
+         (for example file:src/db.rs or user:\"said so on 2026-11-11\")",
+        REF_KINDS.join(", ")
+    )
+}
+
+/// The words shown for an evidence category.
+pub fn evidence_label(evidence: Option<&str>) -> &'static str {
+    match evidence {
+        Some("user_statement") => "user statement",
+        Some("observation") => "observation",
+        Some("inference") => "inference",
+        _ => "unknown",
+    }
+}
 pub const FROM: &str = "FROM nodes n LEFT JOIN nodes p ON p.id = n.project_id";
 
 fn default_origin() -> String {
@@ -68,6 +119,20 @@ pub struct Node {
     pub visibility: String,
     #[serde(default = "default_rev")]
     pub rev: i64,
+    /// How this was learned: one of [`EVIDENCE`], or `None` for unknown.
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// When someone last checked this against its evidence. An edit does
+    /// not set it.
+    #[serde(default)]
+    pub verified_at: Option<String>,
+    #[serde(default)]
+    pub verified_by: Option<String>,
+    /// What was checked.
+    #[serde(default)]
+    pub verified_note: Option<String>,
+    #[serde(default)]
+    pub refs: Vec<Ref>,
 }
 
 impl Node {
@@ -116,6 +181,14 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
         origin: row.get(13)?,
         visibility: row.get(14)?,
         rev: row.get(15)?,
+        evidence: row.get(16)?,
+        verified_at: row.get(17)?,
+        verified_by: row.get(18)?,
+        verified_note: row.get(19)?,
+        refs: row
+            .get::<_, Option<String>>(20)?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -142,6 +215,8 @@ pub struct NewNode<'a> {
     pub status: Option<&'a str>,
     pub project_id: Option<&'a str>,
     pub tags: &'a [String],
+    pub evidence: Option<&'a str>,
+    pub refs: &'a [Ref],
 }
 
 /// Run `f` inside one write transaction. The lock is taken at the start, so
@@ -221,6 +296,8 @@ pub fn ensure_project(conn: &Connection, an: &Analyzer, meta: &Meta, name: &str)
             status: None,
             project_id: None,
             tags: &[],
+            evidence: None,
+            refs: &[],
         },
     )
 }
@@ -229,8 +306,8 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
     let id = ulid::Ulid::generate().to_string();
     conn.execute(
         &format!(
-            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8)"
+            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author, evidence) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8, ?9)"
         ),
         params![
             id,
@@ -240,20 +317,23 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
             new.status,
             new.project_id,
             meta.source,
-            meta.author
+            meta.author,
+            new.evidence
         ],
     )?;
     set_tags(conn, &id, new.tags)?;
+    set_refs(conn, &id, new.refs)?;
     reindex(conn, an, &id)?;
     Ok(id)
 }
 
-/// Save every editable field of `node`, and raise its revision.
+/// Save every editable field of `node`, and raise its revision. The
+/// verification fields are not among them: an edit never verifies a node.
 pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> {
     conn.execute(
         &format!(
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
-             updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             evidence = ?7, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -261,11 +341,68 @@ pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> 
             node.title,
             node.body,
             node.status,
-            node.project_id
+            node.project_id,
+            node.evidence
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;
+    set_refs(conn, &node.id, &node.refs)?;
     reindex(conn, an, &node.id)
+}
+
+/// Replace the references of a node. A reference that stays keeps the time
+/// it was first added.
+pub fn set_refs(conn: &Connection, id: &str, refs: &[Ref]) -> Result<()> {
+    let mut keep: Vec<&Ref> = refs.iter().collect();
+    keep.sort();
+    keep.dedup();
+    let old: Vec<Ref> = conn
+        .prepare("SELECT kind, value FROM refs WHERE node_id = ?1")?
+        .query_map([id], |r| {
+            Ok(Ref {
+                kind: r.get(0)?,
+                value: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    for gone in old.iter().filter(|r| !keep.contains(r)) {
+        conn.execute(
+            "DELETE FROM refs WHERE node_id = ?1 AND kind = ?2 AND value = ?3",
+            params![id, gone.kind, gone.value],
+        )?;
+    }
+    for new in keep {
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO refs (node_id, kind, value, created_at) VALUES (?1, ?2, ?3, {NOW})"
+            ),
+            params![id, new.kind, new.value],
+        )?;
+    }
+    Ok(())
+}
+
+/// Record that the node was checked against its evidence: `note` says what
+/// was checked. The content and `updated_at` do not change.
+pub fn verify(conn: &Connection, id: &str, by: Option<&str>, note: &str) -> Result<()> {
+    conn.execute(
+        &format!(
+            "UPDATE nodes SET verified_at = {NOW}, verified_by = ?2, verified_note = ?3, \
+             rev = rev + 1 WHERE id = ?1"
+        ),
+        params![id, by, note],
+    )?;
+    Ok(())
+}
+
+/// Take the verification away.
+pub fn unverify(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET verified_at = NULL, verified_by = NULL, verified_note = NULL, \
+         rev = rev + 1 WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
 }
 
 pub fn set_status(conn: &Connection, id: &str, status: &str) -> Result<()> {
@@ -377,6 +514,7 @@ pub fn purge(conn: &Connection, id: &str) -> Result<()> {
     }
     conn.execute("DELETE FROM edges WHERE from_id = ?1 OR to_id = ?1", [id])?;
     conn.execute("DELETE FROM tags WHERE node_id = ?1", [id])?;
+    conn.execute("DELETE FROM refs WHERE node_id = ?1", [id])?;
     conn.execute("DELETE FROM nodes_fts WHERE node_id = ?1", [id])?;
     conn.execute("DELETE FROM nodes WHERE id = ?1", [id])?;
     Ok(())
