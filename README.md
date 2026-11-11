@@ -147,4 +147,4 @@ It runs the checks, builds the binaries from the tagged commit, creates and push
 
 A local release holds only the binaries your machine can build. A Mac builds both Mac binaries. It can also build the Linux binaries if [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) is installed and you run `SON_TARGETS=all make publish`. The Windows binary can only be built on Windows.
 
-[PLAN.md](PLAN.md) holds the design and the plan for version 2 (an optional central store with sync).
+[TODO.md](TODO.md) is the priority-sorted backlog index; full context and agreed decisions are in the linked `todos/<number>.md` files. [Todo #13](todos/13.md) and its subtodos hold future proposals for an optional central store and sync.

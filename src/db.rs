@@ -7,7 +7,7 @@ const SCHEMA_VERSION: i64 = 3;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
-/// See V2.md, "Existing schema foundations".
+/// See todos/13.md, "Existing schema foundations".
 const SCHEMA_V1: &str = "
 CREATE TABLE nodes (
     id          TEXT PRIMARY KEY,

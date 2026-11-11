@@ -1,4 +1,4 @@
-//! son: a local second brain for Claude sessions. See PLAN.md.
+//! son: a local second brain for Claude sessions. See README.md for usage and TODO.md for planned improvements.
 
 pub mod activity;
 pub mod agents;
