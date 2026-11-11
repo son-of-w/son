@@ -22,7 +22,19 @@ macOS only. Download the archive for your Mac from the [releases page](https://g
 tar -xzf son-v*-aarch64-apple-darwin.tar.gz && mv son /usr/local/bin/
 ```
 
-Or build it from source with Rust:
+Or build it from source with Rust. From a clone of this repository:
+
+```bash
+make install
+```
+
+That puts `son` in `~/.cargo/bin`. To choose another place, give a prefix (the binary goes in its `bin` folder):
+
+```bash
+make install PREFIX=/usr/local
+```
+
+Without a clone:
 
 ```bash
 cargo install --git https://github.com/Raxvis/son-of-w
@@ -104,9 +116,9 @@ Do not store secrets. The database is plain text.
 ## Development
 
 ```bash
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+make check
 ```
+
+`make check` runs what CI runs: the format check, clippy, and all tests. `make` on its own lists every target: `build`, `release`, `test`, `fmt`, `lint`, `check`, `install`, `uninstall`, `clean`.
 
 [PLAN.md](PLAN.md) holds the design and the plan for version 2 (an optional central store with sync).

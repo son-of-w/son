@@ -4,7 +4,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 
 ## Rules
 
-- Before a step is done, all three must pass: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+- Before a step is done, `make check` must pass. It runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, the same as CI.
 - Write tests for analyzer and ranking changes. `tests/ranking.rs` holds a 50-node corpus with known best answers; `SON_RANK_DEBUG=1 cargo test --test ranking -- --nocapture` prints the scores.
 - Never run `son init` against the real home directory while testing: it writes skills and instruction files such as `~/.claude/CLAUDE.md`. (`son init --list-agents` only reads, and is safe.) Set `HOME` and `SON_DB` to a temporary place, as `tests/cli.rs` does.
 - Version 1 has no network calls. The central store is version 2 (see PLAN.md); do not start it unasked.
