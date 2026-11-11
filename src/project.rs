@@ -21,6 +21,13 @@ pub fn detect(cwd: &Path) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
+/// The folder that holds the project: the git root, else `cwd` itself.
+pub fn root(cwd: &Path) -> std::path::PathBuf {
+    git(cwd, &["rev-parse", "--show-toplevel"])
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
 fn from_marker(cwd: &Path) -> Option<String> {
     cwd.ancestors().find_map(|dir| {
         let text = std::fs::read_to_string(dir.join(MARKER)).ok()?;

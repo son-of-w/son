@@ -42,6 +42,12 @@ impl NodeType {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScopeArg {
+    Global,
+    Project,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Relation {
     #[value(name = "belongs_to", alias = "belongs-to")]
     BelongsTo,
@@ -69,14 +75,39 @@ impl Relation {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Create the database and add the son block to ~/.claude/CLAUDE.md
+    /// Create the database and set son up for your AI agents
+    ///
+    /// In a terminal this asks which agents to set up and whether to do it
+    /// for every project (global) or only this one. Give --agent and --scope,
+    /// or --yes, to skip the questions.
     Init {
-        /// Do not touch CLAUDE.md
+        /// Agents to set up, by name (comma-separated). See --list-agents
+        #[arg(long, short = 'a', value_delimiter = ',')]
+        agent: Vec<String>,
+        /// Set up for every project (global) or only this project folder
+        #[arg(long, value_enum)]
+        scope: Option<ScopeArg>,
+        /// The same as --scope global
+        #[arg(long, short = 'g', conflicts_with = "scope")]
+        global: bool,
+        /// Do not ask: use the detected agents and the global scope unless given
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Write the skill only, and leave instruction files alone
         #[arg(long)]
-        no_claude_md: bool,
-        /// Only print the CLAUDE.md block
+        skill_only: bool,
+        /// Only create the database
+        #[arg(long)]
+        db_only: bool,
+        /// List the agents son knows, and which are detected here
+        #[arg(long)]
+        list_agents: bool,
+        /// Only print the instruction block
         #[arg(long)]
         print_block: bool,
+        /// Only print the skill file
+        #[arg(long)]
+        print_skill: bool,
     },
     /// Save a node: decision, pattern, fact, note, todo or project
     Remember {

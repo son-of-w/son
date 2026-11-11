@@ -47,6 +47,9 @@ impl Sandbox {
             .env("SON_DB", self.root.join("son.db"))
             .env("HOME", self.root.join("home"))
             .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("CODEX_HOME")
+            .env_remove("SON_NO_LOG")
             .env_remove("SON_SOURCE");
         command
     }
@@ -495,7 +498,9 @@ fn json_output_is_valid_on_every_command() {
         vec!["reindex"],
         vec!["drop", id.as_str()],
         vec!["restore", id.as_str()],
-        vec!["init", "--no-claude-md"],
+        vec!["init", "--db-only"],
+        vec!["init", "--list-agents"],
+        vec!["init", "--agent", "claude", "--scope", "global"],
     ] {
         let mut full = vec!["--json"];
         full.extend(args);
@@ -581,39 +586,204 @@ fn export_and_import_round_trip() {
     assert!(!third.son("alpha", &["import", "/no/such/file.json"]).ok);
 }
 
+/// `son init` for Claude Code, global, without questions.
+const INIT_CLAUDE: [&str; 5] = ["init", "--agent", "claude-code", "--scope", "global"];
+
 #[test]
-fn init_adds_the_claude_md_block_once_and_keeps_other_text() {
+fn init_adds_the_block_once_and_keeps_other_text() {
     let sb = Sandbox::new("init");
-    let claude_md = sb.root.join("home").join(".claude").join("CLAUDE.md");
+    let home = sb.root.join("home");
+    let claude_md = home.join(".claude").join("CLAUDE.md");
+    let skill = home.join(".claude/skills/son/SKILL.md");
     std::fs::create_dir_all(claude_md.parent().unwrap()).unwrap();
     std::fs::write(&claude_md, "# My rules\n\nBe brief.\n").unwrap();
 
-    assert!(sb.ok("alpha", &["init"]).stdout.contains("block added"));
-    assert!(sb.ok("alpha", &["init"]).stdout.contains("block unchanged"));
+    let first = sb.ok("alpha", &INIT_CLAUDE).stdout;
+    assert!(first.contains("scope: global"));
+    assert!(first.contains("Claude Code"));
+    assert!(
+        first.contains("skill  created   ~/.claude/skills/son/SKILL.md"),
+        "{first}"
+    );
+    assert!(
+        first.contains("rules  added     ~/.claude/CLAUDE.md"),
+        "{first}"
+    );
+    let again = sb.ok("alpha", &INIT_CLAUDE).stdout;
+    assert!(again.contains("skill  unchanged") && again.contains("rules  unchanged"));
+
     let text = std::fs::read_to_string(&claude_md).unwrap();
     assert!(text.starts_with("# My rules\n\nBe brief.\n"));
     assert_eq!(text.matches("<!-- son:start -->").count(), 1);
     assert!(text.contains("son recall"));
+    let skill_text = std::fs::read_to_string(&skill).unwrap();
+    assert!(skill_text.starts_with("---\nname: son\ndescription: "));
+    assert!(skill_text.contains("son recall"));
 
-    // An out-of-date block is replaced in place.
+    // An out-of-date block or skill is replaced in place.
     let stale = text.replace("son recall", "son rekall");
     std::fs::write(&claude_md, format!("{stale}\n## Later section\n")).unwrap();
-    assert!(sb.ok("alpha", &["init"]).stdout.contains("block updated"));
+    std::fs::write(&skill, "old skill").unwrap();
+    let updated = sb.ok("alpha", &INIT_CLAUDE).stdout;
+    assert!(updated.contains("skill  updated") && updated.contains("rules  updated"));
     let text = std::fs::read_to_string(&claude_md).unwrap();
     assert!(!text.contains("rekall") && text.ends_with("## Later section\n"));
+    assert_eq!(std::fs::read_to_string(&skill).unwrap(), skill_text);
 
-    // With no file at all, it is created.
+    // With no instruction file at all, it is created.
     std::fs::remove_file(&claude_md).unwrap();
-    assert!(sb.ok("alpha", &["init"]).stdout.contains("block created"));
+    assert!(sb
+        .ok("alpha", &INIT_CLAUDE)
+        .stdout
+        .contains("rules  created"));
 
-    // --no-claude-md leaves it alone; --print-block only prints.
+    // --skill-only and --db-only leave it alone; the print flags only print.
     std::fs::remove_file(&claude_md).unwrap();
-    sb.ok("alpha", &["init", "--no-claude-md"]);
+    let mut skill_only = INIT_CLAUDE.to_vec();
+    skill_only.push("--skill-only");
+    sb.ok("alpha", &skill_only);
+    sb.ok("alpha", &["init", "--db-only"]);
     assert!(sb
         .ok("alpha", &["init", "--print-block"])
         .stdout
         .starts_with("<!-- son:start -->"));
+    assert_eq!(
+        sb.ok("alpha", &["init", "--print-skill"]).stdout,
+        skill_text
+    );
     assert!(!claude_md.exists());
+}
+
+#[test]
+fn init_sets_up_several_agents_globally() {
+    let sb = Sandbox::new("init-global");
+    let home = sb.root.join("home");
+    let json = sb
+        .ok(
+            "alpha",
+            &[
+                "--json",
+                "init",
+                "-a",
+                "claude,codex,cursor,antigravity,opencode",
+                "-g",
+            ],
+        )
+        .json();
+    assert_eq!(json["scope"], "global");
+    let installs = json["installs"].as_array().unwrap();
+    let names: Vec<&str> = installs
+        .iter()
+        .map(|i| i["agent"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["claude-code", "codex", "cursor", "antigravity", "opencode"]
+    );
+
+    // Each agent's skill is in that agent's own global skills folder.
+    for skill in [
+        ".claude/skills/son/SKILL.md",
+        ".agents/skills/son/SKILL.md", // Codex
+        ".cursor/skills/son/SKILL.md",
+        ".gemini/config/skills/son/SKILL.md", // Antigravity
+        ".config/opencode/skills/son/SKILL.md",
+    ] {
+        assert!(home.join(skill).is_file(), "{skill} is missing");
+    }
+    // The always-on block goes where the agent has a global instruction file.
+    for rules in [
+        ".claude/CLAUDE.md",
+        ".codex/AGENTS.md",
+        ".gemini/GEMINI.md",
+        ".config/opencode/AGENTS.md",
+    ] {
+        let text = std::fs::read_to_string(home.join(rules)).unwrap();
+        assert!(text.contains("<!-- son:start -->"), "{rules} has no block");
+    }
+    // Cursor keeps global rules in its settings, so it gets the skill only.
+    let cursor = &installs[2];
+    assert_eq!(cursor["skill"]["result"], "created");
+    assert_eq!(cursor["rules"]["result"], "skipped");
+    // Nothing was written into the project folder.
+    assert!(!sb.root.join("alpha/AGENTS.md").exists());
+    assert!(!sb.root.join("alpha/.agents").exists());
+}
+
+#[test]
+fn init_sets_up_one_project_folder() {
+    let sb = Sandbox::new("init-project");
+    let project = sb.root.join("alpha");
+    std::fs::write(project.join("AGENTS.md"), "# Team rules\n").unwrap();
+
+    let out = sb
+        .ok(
+            "alpha",
+            &[
+                "init",
+                "--agent",
+                "claude-code,codex,cursor,gemini",
+                "--scope",
+                "project",
+            ],
+        )
+        .stdout;
+    assert!(out.contains("scope: this project"), "{out}");
+
+    // Codex, Cursor and Gemini share the project's .agents/skills folder.
+    assert!(project.join(".claude/skills/son/SKILL.md").is_file());
+    assert!(project.join(".agents/skills/son/SKILL.md").is_file());
+    assert!(out.contains("skill  created   ") && out.contains("skill  unchanged "));
+
+    // One block each in CLAUDE.md, AGENTS.md and GEMINI.md; AGENTS.md keeps its text.
+    let agents_md = std::fs::read_to_string(project.join("AGENTS.md")).unwrap();
+    assert!(agents_md.starts_with("# Team rules\n"));
+    assert_eq!(agents_md.matches("<!-- son:start -->").count(), 1);
+    for file in ["CLAUDE.md", "GEMINI.md"] {
+        let text = std::fs::read_to_string(project.join(file)).unwrap();
+        assert_eq!(text.matches("<!-- son:start -->").count(), 1, "{file}");
+    }
+    // Nothing global was touched.
+    let home = sb.root.join("home");
+    assert!(!home.join(".claude").exists() && !home.join(".agents").exists());
+}
+
+#[test]
+fn init_without_a_terminal_needs_to_be_told_what_to_do() {
+    let sb = Sandbox::new("init-ask");
+    let home = sb.root.join("home");
+
+    // No flags and no terminal: it explains, and changes nothing.
+    let out = sb.son("alpha", &["init"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("--agent") && out.stderr.contains("detected agents: none"));
+    assert!(!sb.son("alpha", &["init", "--agent", "codex"]).ok); // no scope
+    assert!(!sb.son("alpha", &["init", "--yes"]).ok); // nothing detected
+    assert!(!sb.son("alpha", &["init", "-a", "nope", "-g"]).ok);
+    assert!(!home.join(".agents").exists());
+
+    // --yes takes the agents whose folders exist, and the global scope.
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let hint = sb.son("alpha", &["init"]).stderr;
+    assert!(hint.contains("codex") && hint.contains("cursor"));
+    let json = sb.ok("alpha", &["--json", "init", "--yes"]).json();
+    assert_eq!(json["scope"], "global");
+    let names: Vec<&str> = json["installs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["agent"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"codex") && names.contains(&"cursor"),
+        "{names:?}"
+    );
+    assert!(home.join(".cursor/skills/son/SKILL.md").is_file());
+
+    let listed = sb.ok("alpha", &["init", "--list-agents"]).stdout;
+    assert!(listed.contains("codex") && listed.contains("Cursor (detected)"));
+    assert!(listed.contains("antigravity") && listed.contains("claude-code"));
 }
 
 #[test]
@@ -856,9 +1026,10 @@ fn stats_show_the_store_and_how_son_is_used() {
     let empty = sb.ok("alpha", &["stats"]).stdout;
     assert!(empty.contains("0 nodes in 0 projects"));
     assert!(empty.contains("No commands were logged"));
-    assert!(empty.contains("CLAUDE.md block: NOT installed"));
+    assert!(empty.contains("set up for agents: NOT set up"));
+    assert!(empty.contains("son is not set up for any agent"));
 
-    sb.ok("alpha", &["init"]);
+    sb.ok("alpha", &INIT_CLAUDE);
     let a = sb
         .ok(
             "alpha",
@@ -890,7 +1061,9 @@ fn stats_show_the_store_and_how_son_is_used() {
     assert!(out.contains("todo 2") && out.contains("pattern 1") && out.contains("decision 1"));
     assert!(out.contains("todos: 1 open, 1 done, 0 dropped"));
     assert!(out.contains("1 links · 2 tags"));
-    assert!(out.contains("CLAUDE.md block: installed"));
+    assert!(
+        out.contains("set up for agents in: ~/.claude/skills/son/SKILL.md, ~/.claude/CLAUDE.md")
+    );
     assert!(
         out.contains("11 commands on 1 day: 4 reads, 6 writes, 1 failed"),
         "{out}"
@@ -908,7 +1081,7 @@ fn stats_show_the_store_and_how_son_is_used() {
     assert_eq!(json["activity"]["commands"], 11);
     assert_eq!(json["recall"]["hit_rate"], 0.5);
     assert_eq!(json["recall"]["missed"][0]["name"], "kubernetes");
-    assert_eq!(json["claude_md"]["installed"], true);
+    assert_eq!(json["installed"].as_array().unwrap().len(), 2);
     assert!(json["database"]["bytes"].as_u64().unwrap() > 0);
 
     assert!(sb

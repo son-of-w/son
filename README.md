@@ -1,8 +1,8 @@
 # son-of-w
 
-`son` is a local second brain for Claude Code sessions and other AI agents. It is one binary and one SQLite file. A session calls it from the shell to save and find decisions, patterns, facts, notes and todos, so that a new session in any project can pick up what earlier sessions learned.
+`son` is a local second brain for AI coding agents: Claude Code, Codex, Cursor, Antigravity, Gemini CLI and about 70 more. It is one binary and one SQLite file. A session calls it from the shell to save and find decisions, patterns, facts, notes and todos, so that a new session in any project can pick up what earlier sessions learned.
 
-There is no server, no MCP, no hook and no model. Claude uses it because a block in `~/.claude/CLAUDE.md` tells it to.
+There is no server, no MCP, no hook and no model. An agent uses it because `son init` gives the agent a skill and a short block in its instruction file that tell it to.
 
 ```
 $ son recall terraform aws
@@ -34,7 +34,29 @@ Then run:
 son init
 ```
 
-`son init` creates the database at `~/.son-of-w/son.db` and adds a block of instructions to `~/.claude/CLAUDE.md`. Running it again updates the block in place. Use `son init --no-claude-md` to leave that file alone, or `son init --print-block` to only print the block.
+`son init` creates the database at `~/.son-of-w/son.db`, then asks two questions:
+
+1. **Which agents?** The agents found on your machine are already selected.
+2. **Where?** Global (every project on this machine) or this project folder only.
+
+For each agent it writes two things:
+
+- **A skill**, `son/SKILL.md`, in that agent's skills folder: for example `~/.claude/skills`, `~/.cursor/skills`, or the shared `.agents/skills` in a project. These are the same folders `npx skills add` uses.
+- **A block** in the agent's always-on instruction file, so the agent uses `son` without being asked: `CLAUDE.md` for Claude Code, `GEMINI.md` for Gemini CLI, `AGENTS.md` for the rest. Text outside the block is kept. Globally, only Claude Code, Codex, Gemini CLI, Antigravity and OpenCode have such a file; other agents get the skill only.
+
+Running it again updates these files in place and never adds them twice.
+
+To skip the questions (an agent or a script has to):
+
+```bash
+son init --agent claude-code,codex,cursor --scope global
+```
+
+```bash
+son init --yes
+```
+
+`--yes` takes the detected agents and the global scope. `--scope project` installs into the current project (the git root). Other flags: `--list-agents`, `--skill-only`, `--db-only`, `--print-skill`, `--print-block`.
 
 ## How it works
 
@@ -48,7 +70,7 @@ son init
 ## Commands
 
 ```
-son init                                   create the database, install the CLAUDE.md block
+son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
 son remember <type> "<title>" [--body <text>|-] [--project <name>] [--tag a,b] [--link <id>:<relation>]
 son recall <terms...> [--type <type>] [--project <name>] [--limit 5] [--hops 1]
 son show <id>

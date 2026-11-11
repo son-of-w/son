@@ -6,7 +6,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 
 - Before a step is done, all three must pass: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - Write tests for analyzer and ranking changes. `tests/ranking.rs` holds a 50-node corpus with known best answers; `SON_RANK_DEBUG=1 cargo test --test ranking -- --nocapture` prints the scores.
-- Never run `son init` against the real home directory while testing: it edits `~/.claude/CLAUDE.md`. Set `HOME` and `SON_DB` to a temporary place, as `tests/cli.rs` does.
+- Never run `son init` against the real home directory while testing: it writes skills and instruction files such as `~/.claude/CLAUDE.md`. (`son init --list-agents` only reads, and is safe.) Set `HOME` and `SON_DB` to a temporary place, as `tests/cli.rs` does.
 - Version 1 has no network calls. The central store is version 2 (see PLAN.md); do not start it unasked.
 - macOS only.
 
@@ -27,5 +27,7 @@ A Rust CLI. The binary is `son`. The design is in [PLAN.md](PLAN.md); read it be
 - `src/render.rs` — markdown and JSON output
 - `src/activity.rs` — the activity log, paging, and the numbers for `son stats`
 - `src/report.rs` — output for `son list`, `son log`, `son stats`
-- `src/claude_md.rs` — the block for `~/.claude/CLAUDE.md`
+- `src/agents.rs` — the table of AI agents: skills folders, instruction files, detection
+- `src/setup.rs` — `son init`: choose agents and scope, then install
+- `src/instructions.rs` — the skill file and the instruction block, and how they are written
 - `src/transfer.rs` — export and import

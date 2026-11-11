@@ -135,7 +135,7 @@ Authentication is a bearer token held outside the database (macOS Keychain or an
 ## CLI Surface
 
 ```
-son init [--no-claude-md] [--print-block] # create db, seed synonyms, install the CLAUDE.md block
+son init [--agent a,b] [--scope global|project] [--yes] [--skill-only] [--db-only] [--list-agents]
 son remember <type> "<title>" [--body -] [--project <name>] [--tag t1,t2] [--link <id>:<relation>]
 son recall "<query terms>" [--type todo] [--project <name>] [--hops 1] [--limit 5]
 son edit <id> [--title "<title>"] [--body -] [--type <type>] [--status <status>] [--project <name>] [--tag t1,t2]
@@ -180,9 +180,29 @@ These are the two numbers from Testing the Hypothesis: how often `recall` is cal
 
 Timestamps are UTC to the millisecond, so that two changes in the same second keep their order.
 
-## CLAUDE.md Protocol
+## Agents and `son init`
 
-The binary does nothing unless Claude is told to use it. `son init` appends the block to `~/.claude/CLAUDE.md` itself, between marker comments so that a second run updates the block in place and never duplicates it. If it cannot write the file, it prints the block for the user to paste.
+`son` serves any AI agent that can run a shell command, not only Claude Code. The binary does nothing unless an agent is told to use it, so `son init` sets that up for each agent the user picks.
+
+**The agent table.** [src/agents.rs](src/agents.rs) lists 73 agents. For each one it holds the skills folder inside a project, the skills folder for all projects, and the folder whose presence shows the agent is installed. These follow the table in [vercel-labs/skills](https://github.com/vercel-labs/skills) (`src/agents.ts`), so a `son` skill lands where `npx skills add` would put one. Many agents (Codex, Cursor, Gemini CLI, Antigravity, Copilot, OpenCode and others) share `.agents/skills` inside a project.
+
+**Two questions.** In a terminal, `son init` asks which agents to set up (detected ones are preselected) and where: global, for every project on the machine, or the current project folder (the git root). `--agent`, `--scope` and `--yes` answer the questions in advance. Without a terminal and without those flags it changes nothing and says what to pass.
+
+**Two files for each agent.**
+
+* The **skill**: `son/SKILL.md` in the agent's skills folder. It has the standard `name` and `description` front matter, and the agent loads it when the description fits the task. The whole file belongs to `son` and is replaced on a rerun.
+* The **block**: a short section between marker comments in the agent's always-on instruction file, so the agent calls `son` without being asked. A rerun replaces the block in place; text outside the markers is kept.
+
+| Scope | Claude Code | Gemini CLI | Codex | Antigravity | OpenCode | Every other agent |
+| --- | --- | --- | --- | --- | --- | --- |
+| Project | `CLAUDE.md` | `GEMINI.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| Global | `~/.claude/CLAUDE.md` | `~/.gemini/GEMINI.md` | `~/.codex/AGENTS.md` | `~/.gemini/GEMINI.md` | `~/.config/opencode/AGENTS.md` | none: skill only |
+
+Agents such as Cursor keep their global rules in settings, not in a file, so globally they get the skill only. The skill alone is weaker than the block: it is loaded when the agent judges it relevant, not at every session start.
+
+The instruction-file paths, unlike the skills folders, are not from vercel-labs/skills. Claude Code, Codex, Gemini CLI and OpenCode are well established; the Antigravity global file and the use of `AGENTS.md` by each of the less common agents should be checked against that agent's own documentation.
+
+## The Protocol
 
 **Relation to Claude's own memory:** `son` is the main store for project context and for anything the user hands off to be kept ("I need to do this", "remember this", "handle this later"). Each item is saved against the current project and is reachable from every other project through recall. It takes precedence over Claude's built-in memory for those. It does not remove the built-in memory: Claude may still keep its own notes there for things specific to one user and one session's way of working.
 
@@ -222,7 +242,7 @@ Per-repo CLAUDE.md files can add the project name explicitly and a short list of
 
 ### M4 — Agent ergonomics
 
-* `son init` appends the CLAUDE.md block (idempotent, falls back to printing).
+* `son init` sets up the chosen agents: a skill and an instruction block for each (idempotent).
 * Homebrew formula or tap for install on macOS (not done yet; GitHub Actions builds release binaries for both Mac architectures when a `v*` tag is pushed).
 * `--json` everywhere, stdin bodies, `export`/import, `SON_DB` override, concurrency safety (WAL mode, busy timeout) so parallel sessions don't collide.
 * Tighten CLAUDE.md wording based on what Claude actually does in practice.

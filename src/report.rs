@@ -149,12 +149,12 @@ fn size(bytes: u64) -> String {
 }
 
 /// What the numbers say about how well `son` is being used.
-fn remarks(stats: &Stats, claude_md_installed: Option<bool>) -> Vec<String> {
+fn remarks(stats: &Stats, set_up: bool) -> Vec<String> {
     let mut remarks = Vec::new();
     let (activity, recall) = (&stats.activity, &stats.recall);
-    if claude_md_installed == Some(false) {
+    if !set_up {
         remarks.push(
-            "The son block is not in CLAUDE.md, so Claude has no reason to call son. Run `son init`."
+            "son is not set up for any agent here, so no agent has a reason to call it. Run `son init`."
                 .to_string(),
         );
     }
@@ -200,20 +200,17 @@ fn remarks(stats: &Stats, claude_md_installed: Option<bool>) -> Vec<String> {
     remarks
 }
 
-pub fn stats(stats: &Stats, database: &Path, claude_md: Option<(&Path, bool)>, json: bool) {
+pub fn stats(stats: &Stats, database: &Path, installed: &[std::path::PathBuf], json: bool) {
     let bytes = std::fs::metadata(database).map(|m| m.len()).unwrap_or(0);
-    let installed = claude_md.map(|(_, installed)| installed);
-    let remarks = remarks(stats, installed);
+    let remarks = remarks(stats, !installed.is_empty());
 
     if json {
         let mut value = serde_json::to_value(stats).expect("stats always serialize");
         value["database"] = json!({ "path": database.display().to_string(), "bytes": bytes });
-        value["claude_md"] = match claude_md {
-            Some((path, installed)) => {
-                json!({ "path": path.display().to_string(), "installed": installed })
-            }
-            None => Value::Null,
-        };
+        value["installed"] = json!(installed
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>());
         value["remarks"] = json!(remarks);
         print_json(&value);
         return;
@@ -249,16 +246,14 @@ pub fn stats(stats: &Stats, database: &Path, claude_md: Option<(&Path, bool)>, j
         println!("- first node {first} · last change {last}");
     }
     println!("- database: {} ({})", database.display(), size(bytes));
-    if let Some((path, installed)) = claude_md {
-        println!(
-            "- CLAUDE.md block: {} ({})",
-            if installed {
-                "installed"
-            } else {
-                "NOT installed"
-            },
-            path.display()
-        );
+    if installed.is_empty() {
+        println!("- set up for agents: NOT set up (run `son init`)");
+    } else {
+        let places: Vec<String> = installed
+            .iter()
+            .map(|path| crate::setup::short_path(path))
+            .collect();
+        println!("- set up for agents in: {}", places.join(", "));
     }
 
     let activity = &stats.activity;

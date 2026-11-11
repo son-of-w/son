@@ -1,12 +1,13 @@
 //! Runs one command.
 
 use crate::activity::{self, Draft, EventFilter, NodeFilter};
+use crate::agents::Scope;
 use crate::analyze::Analyzer;
-use crate::cli::{Cli, Command, NodeType, Relation, SynonymCommand, TodoCommand};
+use crate::cli::{Cli, Command, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
 use crate::store::{self, Meta, NewNode, Node, TODO_STATUSES};
-use crate::{claude_md, db, project, report, transfer};
+use crate::{db, instructions, project, report, setup, transfer};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use rusqlite::Connection;
@@ -64,12 +65,26 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    // The parts of `son init` that only print need no database.
     if let Command::Init {
-        print_block: true, ..
-    } = cli.command
+        list_agents,
+        print_block,
+        print_skill,
+        ..
+    } = &cli.command
     {
-        print!("{}", claude_md::block());
-        return Ok(());
+        if *list_agents {
+            setup::list_agents(cli.json);
+            return Ok(());
+        }
+        if *print_block {
+            print!("{}", instructions::block());
+            return Ok(());
+        }
+        if *print_skill {
+            print!("{}", instructions::skill());
+            return Ok(());
+        }
     }
     let started = Instant::now();
     let path = db::path()?;
@@ -102,7 +117,39 @@ pub fn run(cli: Cli) -> Result<()> {
 
 fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
     match command {
-        Command::Init { no_claude_md, .. } => app.init(path, no_claude_md),
+        Command::Init {
+            agent,
+            scope,
+            global,
+            yes,
+            skill_only,
+            db_only,
+            ..
+        } => {
+            if db_only {
+                if app.json {
+                    render::print_json(&json!({ "database": path.display().to_string() }));
+                } else {
+                    println!("database ready: {}", path.display());
+                }
+                return Ok(());
+            }
+            let scope = match (scope, global) {
+                (Some(ScopeArg::Global), _) | (None, true) => Some(Scope::Global),
+                (Some(ScopeArg::Project), _) => Some(Scope::Project),
+                (None, false) => None,
+            };
+            setup::run(
+                path,
+                &setup::Options {
+                    agents: agent,
+                    scope,
+                    yes,
+                    skill_only,
+                    json: app.json,
+                },
+            )
+        }
         Command::Remember {
             kind,
             title,
@@ -190,13 +237,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         ),
         Command::Stats { days, all } => {
             let stats = activity::stats(&app.conn, (!all).then_some(days))?;
-            let target = claude_md::target();
-            let claude_md = target.as_deref().map(|target| {
-                let installed = std::fs::read_to_string(target)
-                    .is_ok_and(|text| text.contains(claude_md::START));
-                (target, installed)
-            });
-            report::stats(&stats, path, claude_md, app.json);
+            report::stats(&stats, path, &setup::installed_files(), app.json);
             Ok(())
         }
         Command::Reindex => {
@@ -345,50 +386,6 @@ impl App {
             again.push_str(&format!(" --limit {limit}"));
         }
         report::events(&events, &again, self.json);
-        Ok(())
-    }
-
-    fn init(&self, path: &std::path::Path, no_claude_md: bool) -> Result<()> {
-        let mut report = json!({ "database": path.display().to_string() });
-        if !self.json {
-            println!("database ready: {}", path.display());
-        }
-        if no_claude_md {
-            if self.json {
-                render::print_json(&report);
-            }
-            return Ok(());
-        }
-
-        let installed = claude_md::target()
-            .ok_or_else(|| anyhow!("HOME is not set"))
-            .and_then(|target| claude_md::install(&target).map(|outcome| (target, outcome)));
-        match installed {
-            Ok((target, outcome)) => {
-                report["claude_md"] = json!({
-                    "path": target.display().to_string(),
-                    "result": outcome.as_str(),
-                });
-                if !self.json {
-                    println!("CLAUDE.md block {}: {}", outcome.as_str(), target.display());
-                }
-            }
-            Err(err) => {
-                report["claude_md"] = json!({
-                    "result": "not written",
-                    "reason": format!("{err:#}"),
-                    "block": claude_md::block(),
-                });
-                if !self.json {
-                    println!("could not write CLAUDE.md ({err:#}).");
-                    println!("Add this block to ~/.claude/CLAUDE.md yourself:\n");
-                    print!("{}", claude_md::block());
-                }
-            }
-        }
-        if self.json {
-            render::print_json(&report);
-        }
         Ok(())
     }
 
