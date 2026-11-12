@@ -6,7 +6,7 @@
 # The formula installs the binary that the release holds for the Mac's
 # processor (Apple silicon or Intel) and for Linux, with the checksums from
 # the release's SHA256SUMS file. It does not run `son init`.
-# Put the output in a tap as Formula/son.rb (see todos/12.md).
+# Put the output in a tap as Formula/son.rb (see todo #12).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:-$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)}"

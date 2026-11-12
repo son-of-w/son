@@ -1,6 +1,6 @@
 # Evaluation of the memory loop
 
-This folder holds what is needed to test `son` with real agents ([todo #11](../todos/11.md)): does one agent save what it learns, and does a fresh session of another agent find it and use it? All data is fictional.
+This folder holds what is needed to test `son` with real agents (todo #11): does one agent save what it learns, and does a fresh session of another agent find it and use it? All data is fictional.
 
 Tests with a mocked command line do not answer this. Only real agent sessions do.
 

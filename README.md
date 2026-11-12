@@ -208,5 +208,3 @@ make publish
 It runs the checks, builds the binaries from the tagged commit, creates and pushes the tag `v<version>` if it is missing, stops any Release workflow run for that tag, and publishes the release with the GitHub CLI (`gh`). It is safe to run again. `make dist` only builds the archives into `dist/`. Both use [scripts/release.sh](scripts/release.sh), the same script the workflow runs.
 
 A local release holds only the binaries your machine can build. A Mac builds both Mac binaries. It can also build the Linux binaries if [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) is installed and you run `SON_TARGETS=all make publish`. The Windows binary can only be built on Windows.
-
-[TODO.md](TODO.md) is the priority-sorted backlog index; full context and agreed decisions are in the linked `todos/<number>.md` files. [Todo #13](todos/13.md) and its subtodos hold future proposals for an optional central store and sync.
