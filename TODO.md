@@ -4,6 +4,7 @@
   - P2 #13.3 [Implement offline-first pull and push sync](todos/13.3.md)
   - P2 #13.4 [Rank recalled local and central context with origin labels](todos/13.4.md)
   - P2 #13.5 [Build the central-store reference server and API](todos/13.5.md)
+  - P2 #13.6 [Support MCP if needed: a local MCP service and a remote MCP store](todos/13.6.md)
 - P3 #12 [Provide a Homebrew formula or tap for macOS](todos/12.md) — formula script ready; the tap needs a decision
 
 Version 0.2.0 is released after #12 is done (William, 2026-11-11; #11 is done). Until then, releases stay in 0.1.x.
