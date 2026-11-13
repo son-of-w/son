@@ -2,7 +2,10 @@
 //! numbers `son stats` draws from it.
 //!
 //! The log is local bookkeeping. It is not part of an export and will not
-//! be synced. Set `SON_NO_LOG=1` to stop writing it.
+//! be synced. Set `SON_NO_LOG=1` to stop writing it. A row is skipped when
+//! the database is locked at the moment it would be written, so the counts
+//! can be a little low; the time in `ms` is the command's own work and does
+//! not include writing the row.
 
 use crate::store::{self, Node, COLS, FROM, NCOLS};
 use anyhow::Result;
@@ -43,9 +46,19 @@ fn clip(text: &str) -> String {
     text.trim().chars().take(DETAIL_CHARS).collect()
 }
 
+/// Write the row for one command. One attempt, with no wait: when another
+/// session holds the write lock at this moment, the row is skipped. The
+/// log is for statistics, and the command's answer is already given; a
+/// read must not wait for the lock only to say that it ran.
 pub fn record(conn: &Connection, event: &Event) -> Result<()> {
-    crate::db::retry_busy(|| record_once(conn, event))?;
-    Ok(())
+    // SQLite's own wait applies to this statement too, so set it to zero.
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    let written = record_once(conn, event);
+    conn.busy_timeout(crate::db::busy_wait())?;
+    match written {
+        Err(err) if crate::db::is_busy(&err) => Ok(()),
+        other => Ok(other.map(|_| ())?),
+    }
 }
 
 fn record_once(conn: &Connection, event: &Event) -> rusqlite::Result<usize> {

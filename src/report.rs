@@ -592,6 +592,9 @@ pub fn stats(stats: &Stats, database: &Path, installed: &[std::path::PathBuf], j
     if let Some(first) = &stats.first_event_at {
         println!("- logging since {first}");
     }
+    println!(
+        "- a command that ends while another session holds the database is not logged, so these counts can be a little low"
+    );
 
     let recall = &stats.recall;
     println!("\n## Recall ({period})");

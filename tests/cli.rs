@@ -3850,7 +3850,46 @@ fn a_held_lock_fails_after_a_bounded_wait_and_changes_nothing() {
         .output()
         .unwrap();
 
+    // With the log on, a read does not wait for the lock to write its log
+    // row: the row is skipped. The wait is set long, so a read that waits
+    // for it is seen.
+    let rows = |command: &str| -> i64 {
+        holder
+            .query_row(
+                "SELECT count(*) FROM events WHERE command = ?1",
+                [command],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    for args in [vec!["recall", "lock"], vec!["context"], vec!["list"]] {
+        let started = std::time::Instant::now();
+        let out = sb
+            .command("alpha", &args)
+            .env("SON_BUSY_MS", "8000")
+            .output()
+            .unwrap();
+        let took = started.elapsed();
+        assert!(out.status.success(), "{args:?}");
+        assert!(
+            took.as_millis() < 4000,
+            "{args:?} waited for the lock to write its log row: {took:?}"
+        );
+        assert_eq!(rows(args[0]), 0, "{args:?} was logged through a held lock");
+    }
+    assert!(String::from_utf8_lossy(
+        &sb.command("alpha", &["recall", "lock"])
+            .env("SON_BUSY_MS", "8000")
+            .output()
+            .unwrap()
+            .stdout
+    )
+    .contains("Before the lock"));
+
     holder.execute_batch("ROLLBACK").unwrap();
+    // With no lock held, the same commands are logged as before.
+    sb.ok("alpha", &["recall", "lock"]);
+    assert_eq!(rows("recall"), 1);
     drop(holder);
     let notes = sb.ok("alpha", &["--json", "list", "--type", "note"]).json();
     assert_eq!(notes["total"], 1, "{notes}");

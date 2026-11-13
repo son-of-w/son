@@ -300,6 +300,8 @@ Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every 
 | `SON_NO_LOG=1` | Turn the activity log off. The log is local |
 | `SON_REVIEW_FACT_DAYS`, `SON_REVIEW_DECISION_DAYS`, `SON_REVIEW_TODO_DAYS` | The age limits for `son review` |
 
+The activity log never makes a command wait. Its row is written in one attempt after the answer is given; if another session holds the database at that moment, the row is skipped, so the counts in `son log` and `son stats` can be a little low. The time stored for a command is the time of its own work: it does not include starting the program or writing the log row.
+
 ## For programs
 
 ### Errors
