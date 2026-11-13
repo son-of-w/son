@@ -70,8 +70,17 @@ impl Dump {
 
 /// Everything, or one collection. Dropped nodes are included so a backup can
 /// still restore them.
-pub fn export(conn: &Connection, project_id: Option<&str>) -> Result<Dump> {
+pub fn export(conn: &Connection, project_id: Option<&str>, tags: &[String]) -> Result<Dump> {
     let mut nodes = store::list_nodes(conn, project_id, None, true)?;
+    if !store::clean_tags(tags).is_empty() {
+        // The nodes with the tags, and the collections they are in, so
+        // that the file can be imported.
+        nodes.retain(|n| n.kind != "collection" && store::has_tags(n, tags));
+        let parents: HashSet<String> = nodes.iter().filter_map(|n| n.project_id.clone()).collect();
+        for id in parents {
+            nodes.push(store::get_node(conn, &id)?);
+        }
+    }
     // Collections first, then oldest first (a ULID sorts by creation time).
     nodes.sort_by(|a, b| (a.kind != "collection", &a.id).cmp(&(b.kind != "collection", &b.id)));
     let ids: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();

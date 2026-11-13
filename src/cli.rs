@@ -176,7 +176,8 @@ pub enum Command {
         /// Collection to save to (default: the current collection)
         #[arg(long)]
         collection: Option<String>,
-        /// Comma-separated tags
+        /// Tags to give the node (comma-separated). On the commands that
+        /// read, --tag filters instead
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
         /// Link the new node to another: <id>:<relation> (may repeat)
@@ -208,6 +209,9 @@ pub enum Command {
         /// Only this collection
         #[arg(long)]
         collection: Option<String>,
+        /// Only nodes that have every one of these tags (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
         /// How many matches to show
         #[arg(long, default_value_t = 5)]
         limit: usize,
@@ -303,6 +307,9 @@ pub enum Command {
         /// Only this node type
         #[arg(long = "type", value_enum)]
         kind: Option<NodeType>,
+        /// Only nodes that have every one of these tags (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
         /// List a fact not verified for more than this many days [default: 90]
         #[arg(long, value_name = "DAYS")]
         fact_days: Option<u32>,
@@ -397,6 +404,18 @@ pub enum Command {
         /// Only this collection
         #[arg(long)]
         collection: Option<String>,
+        /// Only nodes that have every one of these tags (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+    },
+    /// List the tags in use, with the number of nodes that have each
+    ///
+    /// Look here before you make a new tag, so that one subject does not
+    /// get two spellings.
+    Tags {
+        /// Only this collection (default: every collection)
+        #[arg(long)]
+        collection: Option<String>,
     },
     /// Load a JSON export, or restore a backup
     ///
@@ -446,6 +465,9 @@ pub enum Command {
         /// Only this node type
         #[arg(long = "type", value_enum)]
         kind: Option<NodeType>,
+        /// Only nodes that have every one of these tags (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
         /// Include dropped nodes
         #[arg(long)]
         dropped: bool,
@@ -496,7 +518,8 @@ pub enum TodoCommand {
         /// Collection to save to (default: the current collection)
         #[arg(long)]
         collection: Option<String>,
-        /// Comma-separated tags
+        /// Tags to give the node (comma-separated). On the commands that
+        /// read, --tag filters instead
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
         /// How this was learned
@@ -525,6 +548,10 @@ pub enum TodoCommand {
         /// Every collection, not only the current one
         #[arg(long)]
         all: bool,
+        /// Only nodes that have every one of these tags (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+
         /// Include done and dropped todos
         #[arg(long)]
         done: bool,

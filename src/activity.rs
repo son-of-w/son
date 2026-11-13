@@ -122,6 +122,8 @@ pub struct NodeFilter<'a> {
     pub project_id: Option<&'a str>,
     pub kind: Option<&'a str>,
     pub include_dropped: bool,
+    /// Keep only nodes that have every one of these tags.
+    pub tags: &'a [String],
 }
 
 /// Nodes, most recently changed first.
@@ -135,9 +137,19 @@ pub fn nodes_page(
     let conditions = "(?1 IS NULL OR n.project_id = ?1) \
          AND ((?2 IS NULL AND n.type != 'collection') OR n.type = ?2) \
          AND (?3 OR n.deleted_at IS NULL)";
+    let conditions = format!("{conditions} AND {}", store::tags_condition(6));
+    let tags = store::tags_param(filter.tags);
     let total: i64 = conn.query_row(
         &format!("SELECT count(*) FROM nodes n WHERE {conditions}"),
-        params![filter.project_id, filter.kind, filter.include_dropped],
+        // Numbers 4 and 5 are the page of the query below; not used here.
+        params![
+            filter.project_id,
+            filter.kind,
+            filter.include_dropped,
+            rusqlite::types::Null,
+            rusqlite::types::Null,
+            tags
+        ],
         |r| r.get(0),
     )?;
     let sql = format!(
@@ -152,7 +164,8 @@ pub fn nodes_page(
                 filter.kind,
                 filter.include_dropped,
                 limit as i64,
-                offset(limit, page)
+                offset(limit, page),
+                tags
             ],
             |r| {
                 let node = store::node_from_row(r)?;

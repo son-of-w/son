@@ -2584,6 +2584,204 @@ fn uninstall_removes_what_init_wrote_and_nothing_else() {
         .starts_with(mine));
 }
 
+#[test]
+fn a_tag_filter_keeps_only_nodes_with_every_tag() {
+    let sb = Sandbox::new("tag-filter");
+    let add = |dir: &str, kind: &str, title: &str, tags: &str| {
+        let mut args = if kind == "todo" {
+            vec!["todo", "add", title]
+        } else {
+            vec!["remember", kind, title]
+        };
+        if !tags.is_empty() {
+            args.extend(["--tag", tags]);
+        }
+        sb.ok(dir, &args).id()
+    };
+    let both = add(
+        "alpha",
+        "pattern",
+        "Terraform layout for AWS billing",
+        "aws,terraform",
+    );
+    let aws = add("alpha", "fact", "AWS billing account number place", "AWS");
+    let plain = add("alpha", "fact", "The word aws billing in a title only", "");
+    let other = add(
+        "beta",
+        "decision",
+        "Billing runs in AWS us-east-1",
+        "#aws,billing",
+    );
+    let todo = add("alpha", "todo", "Rotate the AWS billing key", "aws");
+    let todo_plain = add("alpha", "todo", "Write the billing README", "");
+    sb.ok("alpha", &["link", &aws, "relates_to", &plain]);
+    let has = |out: &str, ids: &[&String], not: &[&String]| {
+        for id in ids {
+            assert!(out.contains(id.as_str()), "{id} is missing from:\n{out}");
+        }
+        for id in not {
+            assert!(!out.contains(id.as_str()), "{id} must not be in:\n{out}");
+        }
+    };
+
+    // recall: only tagged nodes, in every part of the answer, and in the
+    // order they have without the filter.
+    let all = sb
+        .ok("alpha", &["recall", "aws", "billing", "--limit", "10"])
+        .stdout;
+    has(&all, &[&both, &aws, &plain, &other], &[]);
+    let tagged = sb
+        .ok(
+            "alpha",
+            &["recall", "aws", "billing", "--limit", "10", "--tag", "aws"],
+        )
+        .stdout;
+    has(
+        &tagged,
+        &[&both, &aws, &other, &todo],
+        &[&plain, &todo_plain],
+    );
+    let order = |out: &str| -> Vec<usize> {
+        [&both, &aws, &other]
+            .iter()
+            .map(|id| position(out, id))
+            .collect()
+    };
+    let (a, b) = (order(&all), order(&tagged));
+    assert_eq!(a[0] < a[1], b[0] < b[1]);
+    assert_eq!(a[1] < a[2], b[1] < b[2]);
+    // Every tag must be there; spelling is cleaned as for a saved tag.
+    let narrow = sb
+        .ok(
+            "alpha",
+            &["recall", "aws", "billing", "--tag", " #AWS , Terraform"],
+        )
+        .stdout;
+    has(&narrow, &[&both], &[&aws, &plain, &other, &todo]);
+    // With other filters.
+    let facts = sb
+        .ok(
+            "alpha",
+            &["recall", "aws", "billing", "--tag", "aws", "--type", "fact"],
+        )
+        .stdout;
+    // (--type is for the matches; the list of other nodes from the same
+    // collection is not limited by it, with or without a tag filter.)
+    let matches = facts.split("## Also").next().unwrap();
+    has(matches, &[&aws], &[&both, &other, &plain]);
+    let beta = sb
+        .ok(
+            "alpha",
+            &[
+                "recall",
+                "aws",
+                "billing",
+                "--tag",
+                "aws",
+                "--collection",
+                "beta",
+            ],
+        )
+        .stdout;
+    has(&beta, &[&other], &[&both, &aws]);
+    // A tag that no node has: an empty answer, not an error.
+    assert!(sb
+        .ok("alpha", &["recall", "aws", "--tag", "nosuchtag"])
+        .stdout
+        .contains("No matches"));
+
+    // list
+    let list = sb.ok("alpha", &["list", "--tag", "aws"]).stdout;
+    has(&list, &[&both, &aws, &other, &todo], &[&plain, &todo_plain]);
+    let list = sb
+        .ok(
+            "alpha",
+            &[
+                "--json",
+                "list",
+                "--tag",
+                "aws",
+                "--collection",
+                "alpha",
+                "--type",
+                "fact",
+            ],
+        )
+        .json();
+    assert_eq!(list["total"], 1, "{list}");
+    assert_eq!(
+        sb.ok("alpha", &["--json", "list", "--tag", "nosuchtag"])
+            .json()["total"],
+        0
+    );
+    let paged = sb
+        .ok("alpha", &["list", "--tag", "aws", "--limit", "1"])
+        .stdout;
+    assert!(
+        paged.contains("son list --tag aws --limit 1 --page 2"),
+        "{paged}"
+    );
+
+    // todo list
+    let todos = sb.ok("alpha", &["todo", "list", "--tag", "aws"]).stdout;
+    has(&todos, &[&todo], &[&todo_plain]);
+
+    // review: everything here is unverified; make it old enough to list.
+    let review = sb
+        .ok(
+            "alpha",
+            &[
+                "review",
+                "--fact-days",
+                "0",
+                "--decision-days",
+                "0",
+                "--todo-days",
+                "0",
+                "--tag",
+                "aws",
+            ],
+        )
+        .stdout;
+    has(&review, &[&aws, &other, &todo], &[&plain, &todo_plain]);
+
+    // export: the tagged nodes and the collections they are in, so that
+    // the file imports by itself.
+    let export = sb
+        .ok("alpha", &["--json", "export", "--tag", "terraform"])
+        .stdout;
+    let dump: Value = serde_json::from_str(&export).unwrap();
+    let titles: Vec<&str> = dump["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["alpha", "Terraform layout for AWS billing"]);
+    let fresh = Sandbox::new("tag-filter-import");
+    let file = fresh.root.join("in.json");
+    std::fs::write(&file, &export).unwrap();
+    fresh.ok("alpha", &["import", file.to_str().unwrap()]);
+    assert!(sb
+        .ok("alpha", &["export", "--tag", "terraform"])
+        .stdout
+        .contains("Terraform layout"));
+
+    // tags: what is in use, the most used first.
+    let tags = sb.ok("alpha", &["--json", "tags"]).json();
+    assert_eq!(tags[0], serde_json::json!({"tag": "aws", "nodes": 4}));
+    assert_eq!(tags.as_array().unwrap().len(), 3);
+    let in_beta = sb.ok("alpha", &["tags", "--collection", "beta"]).stdout;
+    assert!(in_beta.contains("`aws` · 1 node") && in_beta.contains("`billing`"));
+    assert!(!in_beta.contains("terraform"));
+    // A dropped node does not count.
+    sb.ok("alpha", &["drop", &both]);
+    let tags = sb.ok("alpha", &["--json", "tags"]).json();
+    assert_eq!(tags[0]["nodes"], 3);
+    assert_eq!(tags.as_array().unwrap().len(), 2);
+    assert!(!sb.son("alpha", &["tags", "--collection", "nope"]).ok);
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

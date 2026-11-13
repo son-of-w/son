@@ -112,6 +112,7 @@ Say how you learned what you save, so that a later session can judge it:
 - If `son` fails in a way you do not understand, run `son doctor`: it checks the database and the setup, changes nothing, and names the command that fixes each fault. `son backup <file>` writes a full copy of the database; make one before a risky change if the user wants it.
 - `son history <id>` lists every change to a node; `son undo <id>` reverses the newest one. A wrong edit or drop is not lost: undo it.
 - `son todo list` shows open todos; `son collections` lists collections; `son list` shows recent changes.
+- `son tags` lists the tags in use: look before you make a new one. `--tag a,b` on `son recall`, `son list`, `son review` and `son todo list` keeps only the nodes that have every one of those tags.
 - Relations for `son link`: `relates_to`, `supersedes`, `depends_on`, `derived_from`, `belongs_to`.
 - Add `--json` to any command for structured output. With `--json`, an error is a JSON object on stderr with a stable `code`. `son --help` lists every command.
 - If a write may not have arrived (a timeout, an interrupted command), send it again with the same `--key <text>` on `son remember` or `son todo add`: it is saved once.

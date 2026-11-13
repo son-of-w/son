@@ -71,6 +71,8 @@ pub struct Item {
 pub struct Filter<'a> {
     pub collection_id: Option<&'a str>,
     pub kind: Option<&'a str>,
+    /// Keep only nodes that have every one of these tags.
+    pub tags: &'a [String],
 }
 
 /// True when the two nodes have a link between them, in either direction.
@@ -101,18 +103,27 @@ pub fn items(
                         WHERE e.to_id = n.id AND e.relation = 'supersedes' AND s.deleted_at IS NULL) \
          {FROM} WHERE n.deleted_at IS NULL AND n.type != 'collection' \
            AND (?1 IS NULL OR n.project_id = ?1) AND (?2 IS NULL OR n.type = ?2) \
-         ORDER BY n.id"
+           AND {} \
+         ORDER BY n.id",
+        store::tags_condition(3)
     );
     let rows: Vec<(Node, f64, f64, bool)> = conn
         .prepare(&sql)?
-        .query_map(params![filter.collection_id, filter.kind], |r| {
-            Ok((
-                store::node_from_row(r)?,
-                r.get::<_, Option<f64>>(NCOLS)?.unwrap_or(0.0),
-                r.get::<_, Option<f64>>(NCOLS + 1)?.unwrap_or(0.0),
-                r.get(NCOLS + 2)?,
-            ))
-        })?
+        .query_map(
+            params![
+                filter.collection_id,
+                filter.kind,
+                store::tags_param(filter.tags)
+            ],
+            |r| {
+                Ok((
+                    store::node_from_row(r)?,
+                    r.get::<_, Option<f64>>(NCOLS)?.unwrap_or(0.0),
+                    r.get::<_, Option<f64>>(NCOLS + 1)?.unwrap_or(0.0),
+                    r.get(NCOLS + 2)?,
+                ))
+            },
+        )?
         .collect::<rusqlite::Result<_>>()?;
 
     let mut found: Vec<(u8, f64, Item)> = Vec::new();

@@ -227,6 +227,12 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 - **`.son` is the settings file for a folder.** It holds `key = value` lines, with `#` for comments; `collection` is its only key now.
 - **Collections organize; they do not restrict.** Every agent that uses the database can read every collection. A collection is not a security boundary.
 
+### Tags
+
+- **A tag filter narrows a read.** `--tag a,b` on `son recall`, `son list`, `son review`, `son todo list` and `son export` keeps only the nodes that have every one of the tags. It works together with `--collection` and `--type`. The match is exact, on the tag as it is stored (lowercase, no leading `#`): no stemming and no synonyms. In a recall the filter only takes nodes away, from every part of the answer; the order of the rest does not change. A tag that no node has gives an empty answer. An export with a tag filter holds the tagged nodes and the collections they are in.
+- **`--tag` has two meanings.** On `son remember`, `son todo add` and `son edit` it sets the tags of the node. On the commands above it filters.
+- **`son tags` lists the tags in use**, with the number of nodes for each, the most used first; `--collection` limits it. Look there before you make a new tag, so that one subject does not get two spellings.
+
 ### Todos
 
 - **A todo is a node with a status**: `open`, `done` or `dropped`. `son todo done <id>` finishes it, and `son todo reopen <id>` opens it again; both are in the history and can be undone. Everything else is the same as for other nodes: `son edit <id>` changes it and `son drop <id>` removes it.
@@ -284,14 +290,14 @@ son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
                               [--check]                    save nothing; list possible duplicates
                               [--key <text>]               a repeat with the same key saves nothing new
-son recall <terms...> [--type <type>] [--collection <name>] [--limit 5] [--hops 1]
+son recall <terms...> [--type <type>] [--collection <name>] [--tag a,b] [--limit 5] [--hops 1]
                       [--max-chars <number>] [--explain]
 son context [--collection <name>] [--max-chars <number>]   what a collection holds, for the start of a session
 son show <id>
 son edit <id> [--title] [--body] [--type] [--status] [--priority] [--collection] [--tag] [--evidence] [--ref] [--unref]
 son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
 son stale <id> --reason "<why>" | --clear
-son review [--collection <name>] [--type <type>] [--fact-days 90] [--decision-days 180] [--todo-days 30]
+son review [--collection <name>] [--type <type>] [--tag a,b] [--fact-days 90] [--decision-days 180] [--todo-days 30]
            [--limit 20] [--page 1]
 son merge <source> <survivor> [--body <text>|-] [--title <text>] [--cross-collection]
 son drop <id> [--purge]
@@ -299,19 +305,20 @@ son restore <id>
 son history <id> [--op <number>] [--limit 20] [--page 1]
 son undo <id> [--op <number>]
 son todo add "<title>" [--priority p0..p4] [--collection <name>] [--tag a,b]
-son todo list [--collection <name>] [--all] [--done]
+son todo list [--collection <name>] [--all] [--done] [--tag a,b]
 son todo done <id>
 son todo reopen <id>                       open a done or dropped todo again
 son link <from> <relation> <to>
 son unlink <from> <relation> <to>
 son collections
 son synonym add <term> <canonical> | list | remove <term>
-son export [--collection <name>]           markdown; add --json for the portable format
+son export [--collection <name>] [--tag a,b]   markdown; add --json for the portable format
+son tags [--collection <name>]             the tags in use, with counts
 son import <file|-> [--replace]            merge a JSON export, or restore a backup
 son backup <file|folder>                   write a full copy of the database
 son doctor                                 check the database and the agent setup
 son reindex
-son list [--collection <name>] [--type <type>] [--dropped] [--limit 20] [--page 1]
+son list [--collection <name>] [--type <type>] [--tag a,b] [--dropped] [--limit 20] [--page 1]
 son log [--collection <name>] [--command <name>] [--errors] [--limit 20] [--page 1]
 son stats [--days 30 | --all]
 ```

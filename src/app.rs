@@ -70,6 +70,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Link { .. } => ("link", true),
         Command::Unlink { .. } => ("unlink", true),
         Command::Collections => ("collections", false),
+        Command::Tags { .. } => ("tags", false),
         Command::Synonym { command } => match command {
             SynonymCommand::Add { .. } => ("synonym add", true),
             SynonymCommand::List => ("synonym list", false),
@@ -291,14 +292,18 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             query,
             kind,
             collection: project,
+            tag,
             limit,
             hops,
             max_chars,
             explain,
         } => app.recall(
             &query.join(" "),
-            kind,
-            project.as_deref(),
+            &Only {
+                kind,
+                project: project.as_deref(),
+                tags: &tag,
+            },
             limit,
             hops,
             &render::Budget { max_chars, explain },
@@ -346,6 +351,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Review {
             collection,
             kind,
+            tag,
             fact_days,
             decision_days,
             todo_days,
@@ -359,6 +365,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             app.review(
                 collection.as_deref(),
                 kind,
+                &tag,
                 &limits,
                 limit as usize,
                 page as usize,
@@ -410,8 +417,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             TodoCommand::List {
                 collection: project,
                 all,
+                tag,
                 done,
-            } => app.todo_list(project.as_deref(), all, done),
+            } => app.todo_list(project.as_deref(), all, done, &tag),
             TodoCommand::Done { id } => app.todo_done(&id),
             TodoCommand::Reopen { id } => app.todo_reopen(&id),
         },
@@ -425,7 +433,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Synonym { command } => app.synonym(command),
         Command::Export {
             collection: project,
-        } => app.export(project.as_deref()),
+            tag,
+        } => app.export(project.as_deref(), &tag),
+        Command::Tags { collection } => app.tags(collection.as_deref()),
         Command::Import { file, replace } => app.import(&file, replace),
         Command::Backup { destination } => {
             let made = crate::backup::make(&app.conn, Path::new(&destination))?;
@@ -459,12 +469,14 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::List {
             collection: project,
             kind,
+            tag,
             dropped,
             limit,
             page,
         } => app.list(
             project.as_deref(),
             kind,
+            &tag,
             dropped,
             limit as usize,
             page as usize,
@@ -606,6 +618,24 @@ struct Edit {
     unref: Vec<String>,
 }
 
+/// What a recall is limited to.
+struct Only<'a> {
+    kind: Option<NodeType>,
+    project: Option<&'a str>,
+    tags: &'a [String],
+}
+
+/// ` --tag a,b` for the command that gives the next page; empty when no
+/// tag filter was given.
+fn tag_flag(tags: &[String]) -> String {
+    let tags = store::clean_tags(tags);
+    if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" --tag {}", tags.join(","))
+    }
+}
+
 /// The values of some references as one text, for the secret check.
 fn ref_values(refs: &[Ref]) -> String {
     let values: Vec<&str> = refs.iter().map(|r| r.value.as_str()).collect();
@@ -635,6 +665,7 @@ impl App {
         &self,
         project: Option<&str>,
         kind: Option<NodeType>,
+        tags: &[String],
         dropped: bool,
         limit: usize,
         page: usize,
@@ -653,6 +684,7 @@ impl App {
                 project_id: project_id.as_deref(),
                 kind: kind.map(NodeType::as_str),
                 include_dropped: dropped,
+                tags,
             },
             limit,
             page,
@@ -665,6 +697,7 @@ impl App {
         if let Some(kind) = kind {
             again.push_str(&format!(" --type {}", kind.as_str()));
         }
+        again.push_str(&tag_flag(tags));
         if dropped {
             again.push_str(" --dropped");
         }
@@ -952,12 +985,16 @@ impl App {
     fn recall(
         &self,
         terms: &str,
-        kind: Option<NodeType>,
-        project: Option<&str>,
+        only: &Only,
         limit: usize,
         hops: u8,
         budget: &render::Budget,
     ) -> Result<()> {
+        let Only {
+            kind,
+            project,
+            tags,
+        } = *only;
         let name = project_name(project)?;
         self.note(|draft| {
             draft.detail = Some(terms.to_string());
@@ -967,7 +1004,7 @@ impl App {
         if project.is_some() && found.is_none() {
             return Err(no_collection(&name));
         }
-        let result = search::recall(
+        let result = search::recall_tagged(
             &self.conn,
             &self.an,
             terms,
@@ -982,6 +1019,7 @@ impl App {
                 limit,
                 hops,
             },
+            tags,
         )?;
         self.note(|draft| {
             draft.results = Some(result.hits.len() as i64);
@@ -1269,6 +1307,7 @@ impl App {
         &self,
         collection: Option<&str>,
         kind: Option<NodeType>,
+        tags: &[String],
         limits: &crate::review::Limits,
         limit: usize,
         page: usize,
@@ -1288,6 +1327,7 @@ impl App {
             &crate::review::Filter {
                 collection_id: collection_id.as_deref(),
                 kind: kind.map(NodeType::as_str),
+                tags,
             },
         )?;
         let total = all.len() as i64;
@@ -1307,6 +1347,7 @@ impl App {
         if let Some(kind) = kind {
             again.push_str(&format!(" --type {}", kind.as_str()));
         }
+        again.push_str(&tag_flag(tags));
         let default = crate::review::Limits::from_env();
         for (flag, value, usual) in [
             ("--fact-days", limits.fact_days, default.fact_days),
@@ -1530,7 +1571,13 @@ impl App {
         Ok(())
     }
 
-    fn todo_list(&self, project: Option<&str>, all: bool, done: bool) -> Result<()> {
+    fn todo_list(
+        &self,
+        project: Option<&str>,
+        all: bool,
+        done: bool,
+        tags: &[String],
+    ) -> Result<()> {
         let (scope, project_id) = if all && project.is_none() {
             ("all collections".to_string(), None)
         } else {
@@ -1547,6 +1594,7 @@ impl App {
         if !done {
             todos.retain(|t| t.status.as_deref() == Some("open"));
         }
+        todos.retain(|t| store::has_tags(t, tags));
         // The most urgent first, then the oldest: a todo list reads top down.
         todos.sort_by(store::todo_order);
         self.note(|draft| {
@@ -1699,7 +1747,7 @@ impl App {
         Ok(())
     }
 
-    fn export(&self, project: Option<&str>) -> Result<()> {
+    fn export(&self, project: Option<&str>, tags: &[String]) -> Result<()> {
         let project_id = match project {
             Some(name) => Some(
                 store::find_project(&self.conn, name.trim())?.ok_or_else(|| no_collection(name))?,
@@ -1707,12 +1755,46 @@ impl App {
             None => None,
         };
         self.note(|draft| draft.project = project.map(|name| name.trim().to_string()));
-        let dump = transfer::export(&self.conn, project_id.as_deref())?;
+        let dump = transfer::export(&self.conn, project_id.as_deref(), tags)?;
         self.note(|draft| draft.results = Some(dump.nodes.len() as i64));
         if self.json {
             println!("{}", serde_json::to_string_pretty(&dump)?);
         } else {
             print!("{}", transfer::markdown(&dump));
+        }
+        Ok(())
+    }
+
+    fn tags(&self, collection: Option<&str>) -> Result<()> {
+        let (scope, collection_id) = match collection {
+            Some(name) => {
+                let id = store::find_project(&self.conn, name.trim())?
+                    .ok_or_else(|| no_collection(name))?;
+                (name.trim().to_string(), Some(id))
+            }
+            None => ("all collections".to_string(), None),
+        };
+        let counts = store::tag_counts(&self.conn, collection_id.as_deref())?;
+        self.note(|draft| {
+            draft.project = collection.map(|name| name.trim().to_string());
+            draft.results = Some(counts.len() as i64);
+        });
+        if self.json {
+            let list: Vec<serde_json::Value> = counts
+                .iter()
+                .map(|(tag, nodes)| json!({ "tag": tag, "nodes": nodes }))
+                .collect();
+            render::print_json(&serde_json::Value::Array(list));
+        } else if counts.is_empty() {
+            println!("No tags in {scope}.");
+        } else {
+            println!("# Tags: {scope}");
+            for (tag, nodes) in &counts {
+                println!(
+                    "- `{tag}` · {nodes} node{}",
+                    if *nodes == 1 { "" } else { "s" }
+                );
+            }
         }
         Ok(())
     }

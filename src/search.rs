@@ -186,6 +186,21 @@ fn match_expression(matchers: &[Matcher]) -> String {
 }
 
 pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> Result<Recall> {
+    recall_tagged(conn, an, terms, opts, &[])
+}
+
+/// [`recall`], keeping only nodes that have every one of `tags`. The
+/// filter only takes nodes away: the order of the rest is the order the
+/// ranking gives. It holds for everything in the answer: the matches,
+/// the linked nodes and the nodes from the matches' collections.
+pub fn recall_tagged(
+    conn: &Connection,
+    an: &Analyzer,
+    terms: &str,
+    opts: &Options,
+    tags: &[String],
+) -> Result<Recall> {
+    let wanted = store::tags_param(tags);
     let query = an.query(terms, &store::synonyms(conn)?);
     if query.groups.is_empty() {
         bail!("nothing to search for in '{terms}'");
@@ -203,7 +218,7 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
             prefix: None,
         })
         .collect();
-    let mut hits = ranked(conn, an, &query, &exact, opts, false)?;
+    let mut hits = ranked(conn, an, &query, &exact, opts, &wanted, false)?;
 
     // Too few? Then also take words that start with a query word, and
     // stored words that are a typo away from one. These never come before
@@ -223,7 +238,7 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
         if match_expression(&loose) != match_expression(&exact) {
             let found: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
             hits.extend(
-                ranked(conn, an, &query, &loose, opts, true)?
+                ranked(conn, an, &query, &loose, opts, &wanted, true)?
                     .into_iter()
                     .filter(|hit| !found.contains(&hit.node.id)),
             );
@@ -240,12 +255,14 @@ pub fn recall(conn: &Connection, an: &Analyzer, terms: &str, opts: &Options) -> 
     hits.truncate(limit);
 
     let mut seen: HashSet<String> = hits.iter().map(|h| h.node.id.clone()).collect();
-    let neighbors = expand(conn, &hits, opts.hops, &mut seen)?;
-    let also = if opts.hops > 0 {
+    let mut neighbors = expand(conn, &hits, opts.hops, &mut seen)?;
+    let mut also = if opts.hops > 0 {
         also_in_projects(conn, &hits, &seen)?
     } else {
         Vec::new()
     };
+    neighbors.retain(|neighbor| store::has_tags(&neighbor.node, tags));
+    also.retain(|node| store::has_tags(node, tags));
     Ok(Recall {
         hits,
         neighbors,
@@ -260,6 +277,7 @@ fn ranked(
     query: &Query,
     matchers: &[Matcher],
     opts: &Options,
+    tags: &str,
     close: bool,
 ) -> Result<Vec<Hit>> {
     let sql = format!(
@@ -272,7 +290,9 @@ fn ranked(
          WHERE nodes_fts MATCH ?1 AND n.deleted_at IS NULL \
            AND (?2 IS NULL OR n.type = ?2) \
            AND (?3 IS NULL OR n.project_id = ?3 OR n.id = ?3) \
+           AND {} \
          ORDER BY {} LIMIT ?4",
+        store::tags_condition(5),
         NCOLS + 1
     );
     // Take more candidates than asked for: the adjustments below reorder them.
@@ -284,7 +304,8 @@ fn ranked(
                 match_expression(matchers),
                 opts.kind,
                 opts.only_project,
-                candidates
+                candidates,
+                tags
             ],
             |r| {
                 Ok((

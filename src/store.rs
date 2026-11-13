@@ -609,6 +609,41 @@ pub fn clean_tags(tags: &[String]) -> Vec<String> {
     clean
 }
 
+/// The tags of a filter as one SQL value: a JSON list of the cleaned
+/// tags. Use with [`tags_condition`].
+pub fn tags_param(tags: &[String]) -> String {
+    serde_json::to_string(&clean_tags(tags)).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// SQL that is true for a node `n` that has every tag in the JSON list
+/// given as parameter number `number`. An empty list keeps every node.
+/// The match is exact, on the tag as it is stored.
+pub fn tags_condition(number: usize) -> String {
+    format!(
+        "NOT EXISTS (SELECT 1 FROM json_each(?{number}) want WHERE NOT EXISTS \
+           (SELECT 1 FROM tags t WHERE t.node_id = n.id AND t.tag = want.value))"
+    )
+}
+
+/// True when `node` has every one of `tags` (cleaned as stored tags are).
+pub fn has_tags(node: &Node, tags: &[String]) -> bool {
+    clean_tags(tags).iter().all(|tag| node.tags.contains(tag))
+}
+
+/// The tags in use on live nodes, with how many nodes have each: the most
+/// used first.
+pub fn tag_counts(conn: &Connection, project_id: Option<&str>) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.tag, count(*) FROM tags t JOIN nodes n ON n.id = t.node_id \
+         WHERE n.deleted_at IS NULL AND (?1 IS NULL OR n.project_id = ?1) \
+         GROUP BY t.tag ORDER BY count(*) DESC, t.tag",
+    )?;
+    let rows = stmt
+        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 pub fn set_tags(conn: &Connection, id: &str, tags: &[String]) -> Result<()> {
     conn.execute("DELETE FROM tags WHERE node_id = ?1", [id])?;
     for tag in clean_tags(tags) {
