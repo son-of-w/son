@@ -102,6 +102,9 @@ pub fn make(conn: &Connection, destination: &Path) -> Result<Made> {
             ));
         }
     }
+    // The copy holds everything, so it is made for its owner only. SQLite
+    // writes into an empty file that is there already.
+    db::private_file(&target).with_context(|| format!("cannot write {}", target.display()))?;
     let made = db::retry_busy(|| {
         conn.execute_batch(&format!(
             "VACUUM INTO '{}'",

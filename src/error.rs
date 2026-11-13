@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use std::fmt;
 
 /// Every code `son` can give.
-pub const CODES: [&str; 17] = [
+pub const CODES: [&str; 18] = [
     "invalid_argument",
     "invalid_request",
     "unknown_id",
@@ -30,6 +30,7 @@ pub const CODES: [&str; 17] = [
     "import_failed",
     "install_failed",
     "broken_block",
+    "possible_secret",
     "io_error",
     "not_empty",
     "problems_found",

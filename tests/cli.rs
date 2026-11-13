@@ -1966,6 +1966,240 @@ fn a_stored_row_of_an_unknown_form_does_not_crash_and_doctor_names_it() {
     assert_eq!(check["status"], "healthy");
 }
 
+/// A text of the form of a Stripe live key. Joined at run time, so that
+/// this file holds nothing a secret scanner reads as a real key.
+fn fake_secret() -> String {
+    ["sk_", "live_", "4eC39HqLyjWDarjtT1zdp7dc"].concat()
+}
+
+#[test]
+fn a_write_that_looks_like_a_secret_is_refused() {
+    let sb = Sandbox::new("secrets");
+    let secret = fake_secret();
+    let body = format!("The payment key is {secret} for now");
+    let id = sb.ok("alpha", &["remember", "fact", "Payment setup"]).id();
+    let other = sb
+        .ok("alpha", &["remember", "fact", "Payment setup, second"])
+        .id();
+    let count = || {
+        sb.ok("alpha", &["--json", "export"]).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let before = sb.ok("alpha", &["--json", "export"]).json()["nodes"].clone();
+
+    let as_ref = secret_ref(&secret);
+    // Every command that takes text refuses it, in every field.
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["remember", "fact", "Key", "--body", &body], "the body"),
+        (vec!["remember", "note", &body], "the title"),
+        (
+            vec!["remember", "note", "Key", "--tag", &secret],
+            "the tags",
+        ),
+        (
+            vec!["remember", "note", "Key", "--ref", &as_ref],
+            "the evidence reference",
+        ),
+        (vec!["todo", "add", "Rotate", "--body", &body], "the body"),
+        (vec!["todo", "add", &body], "the title"),
+        (vec!["edit", &id, "--body", &body], "the body"),
+        (vec!["edit", &id, "--title", &body], "the title"),
+        (vec!["edit", &id, "--tag", &secret], "the tags"),
+        (
+            vec!["edit", &id, "--ref", &as_ref],
+            "the evidence reference",
+        ),
+        (
+            vec!["verify", &id, "--checked", &body],
+            "the --checked text",
+        ),
+        (vec!["stale", &id, "--reason", &body], "the --reason text"),
+        (vec!["merge", &other, &id, "--body", &body], "the body"),
+    ];
+    for (args, field) in &cases {
+        let mut full = vec!["--json"];
+        full.extend(args);
+        let output = sb.command("alpha", &full).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let error: Value = serde_json::from_str(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "possible_secret", "{args:?}");
+        let message = error["error"]["message"].as_str().unwrap();
+        assert!(message.contains(field), "{args:?}: {message}");
+        assert!(message.contains("a Stripe live key") && message.contains("--allow-secret"));
+        assert!(!stderr.contains("4eC39"), "the error shows the text");
+    }
+    // Nothing was saved or changed, and no trace of the text is in the
+    // database file: not in a node, the index, the history or the log.
+    assert_eq!(
+        sb.ok("alpha", &["--json", "export"]).json()["nodes"],
+        before
+    );
+    let log = sb.ok("alpha", &["--json", "log", "--limit", "100"]).stdout;
+    assert!(!log.contains("4eC39"));
+    assert!(log.contains("possible_secret") || log.contains("looks like it holds"));
+    for name in ["son.db", "son.db-wal"] {
+        if let Ok(bytes) = std::fs::read(sb.root.join(name)) {
+            assert!(
+                !bytes.windows(8).any(|w| w == b"4eC39HqL"),
+                "{name} holds the refused text"
+            );
+        }
+    }
+
+    // --check saves nothing, so it is not stopped.
+    sb.ok(
+        "alpha",
+        &["remember", "fact", "Key", "--body", &body, "--check"],
+    );
+
+    // With the flag the write is made. A repeat with the same key gives
+    // the first answer again, with or without the flag.
+    let keyed = [
+        "remember", "fact", "Key form", "--body", &body, "--key", "k1",
+    ];
+    assert!(!sb.son("alpha", &keyed).ok);
+    let mut allowed = keyed.to_vec();
+    allowed.push("--allow-secret");
+    let first = sb.ok("alpha", &allowed);
+    let nodes = count();
+    let replay = sb.ok("alpha", &keyed);
+    assert!(replay.stdout.contains("already saved with this key"));
+    assert_eq!(first.id(), replay.id());
+    assert_eq!(count(), nodes);
+
+    // Doctor lists the stored node by id, without the text, and does not
+    // fail for it.
+    let report = sb.ok("alpha", &["--json", "doctor"]).stdout;
+    assert!(!report.contains("4eC39"));
+    let report: Value = serde_json::from_str(&report).unwrap();
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "secrets")
+        .unwrap();
+    assert_eq!(check["status"], "warning");
+    assert!(check["detail"].as_str().unwrap().contains(&first.id()));
+    assert!(check["fix"].as_str().unwrap().contains("--purge"));
+    assert_eq!(report["status"], "warning");
+
+    // A JSON import with such a node is refused whole.
+    let export = sb.ok("alpha", &["--json", "export"]).stdout;
+    let fresh = Sandbox::new("secrets-import");
+    let file = fresh.root.join("in.json");
+    std::fs::write(&file, &export).unwrap();
+    let out = fresh.son("alpha", &["import", file.to_str().unwrap()]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("nothing was imported: 1 node(s)"),
+        "{}",
+        out.stderr
+    );
+    assert!(out
+        .stderr
+        .contains("the body looks like it holds a Stripe live key"));
+    assert!(!out.stderr.contains("4eC39"));
+    assert!(
+        fresh.ok("alpha", &["list"]).stdout.contains("0 nodes") || {
+            let nodes = fresh.ok("alpha", &["--json", "export"]).json()["nodes"].clone();
+            nodes.as_array().unwrap().is_empty()
+        }
+    );
+    let out = fresh.ok(
+        "alpha",
+        &["import", file.to_str().unwrap(), "--allow-secret"],
+    );
+    assert!(out.stdout.contains("imported:"));
+
+    // The fix that doctor names takes the text out of the database.
+    sb.ok("alpha", &["drop", &first.id(), "--purge"]);
+    let report = sb.ok("alpha", &["--json", "doctor"]).json();
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "secrets")
+        .unwrap()
+        .clone();
+    assert_eq!(check["status"], "healthy");
+}
+
+fn secret_ref(secret: &str) -> String {
+    format!("other:{secret}")
+}
+
+#[cfg(unix)]
+#[test]
+fn new_database_and_backup_files_are_for_the_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+    let sb = Sandbox::new("file-access");
+    let db = sb.root.join("store/son.db");
+    let run = |args: &[&str]| {
+        let out = sb
+            .command("alpha", args)
+            .env("SON_DB", &db)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    run(&["remember", "fact", "First"]);
+    assert_eq!(mode(&db), 0o600);
+    assert_eq!(mode(db.parent().unwrap()), 0o700);
+    // SQLite gives the files beside the database the same mode.
+    let holder = rusqlite::Connection::open(&db).unwrap();
+    holder
+        .execute_batch("BEGIN; SELECT count(*) FROM nodes;")
+        .unwrap();
+    run(&["remember", "fact", "Second"]);
+    for suffix in ["-wal", "-shm"] {
+        let beside = std::path::PathBuf::from(format!("{}{suffix}", db.display()));
+        assert!(
+            beside.exists(),
+            "{suffix} is expected while a session is open"
+        );
+        assert_eq!(mode(&beside), 0o600, "{suffix}");
+    }
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+
+    let backup = sb.root.join("copy.db");
+    run(&["backup", backup.to_str().unwrap()]);
+    assert_eq!(mode(&backup), 0o600);
+
+    let doctor = |name: &str| -> Value {
+        let report: Value = serde_json::from_str(&run(&["--json", "doctor"])).unwrap();
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(doctor("file access")["status"], "healthy");
+
+    // A file that is wider is reported with the command that closes it,
+    // and is not changed: not by doctor, and not by the next command.
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let check = doctor("file access");
+    assert_eq!(check["status"], "warning");
+    assert!(check["fix"].as_str().unwrap().contains("chmod 600"));
+    run(&["remember", "fact", "Third"]);
+    assert_eq!(mode(&db), 0o644);
+}
+
 #[test]
 fn json_errors_have_stable_codes_on_stderr() {
     let sb = Sandbox::new("json-errors");

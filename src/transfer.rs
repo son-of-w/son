@@ -411,17 +411,84 @@ fn refuse_faults(conn: &Connection, dump: &Dump) -> Result<()> {
     ))
 }
 
+/// The text fields of a node that the secret check looks at: a name for
+/// each, and its text.
+pub fn secret_fields(node: &Node) -> Vec<(&'static str, String)> {
+    let refs: Vec<&str> = node.refs.iter().map(|r| r.value.as_str()).collect();
+    vec![
+        ("title", node.title.clone()),
+        ("body", node.body.clone()),
+        ("tags", node.tags.join(" ")),
+        ("evidence reference", refs.join("\n")),
+        (
+            "verification note",
+            node.verified_note.clone().unwrap_or_default(),
+        ),
+        ("stale note", node.stale_note.clone().unwrap_or_default()),
+    ]
+}
+
+/// What in `node` looks like a secret: the field and the kind. The text
+/// itself is not given back.
+pub fn secret_in(node: &Node) -> Option<(&'static str, &'static str)> {
+    secret_fields(node)
+        .iter()
+        .find_map(|(field, text)| crate::secrets::find(text).map(|kind| (*field, kind)))
+}
+
+/// Stop an import that holds a node whose text looks like a secret.
+fn refuse_secrets(dump: &Dump) -> Result<()> {
+    let found: Vec<String> = dump
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(at, node)| {
+            secret_in(node).map(|(field, kind)| {
+                format!(
+                    "  nodes[{at}] (id '{}'): the {field} looks like it holds {kind}",
+                    shown(&node.id)
+                )
+            })
+        })
+        .collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    let mut lines: Vec<String> = found.iter().take(FAULT_LIMIT).cloned().collect();
+    if found.len() > FAULT_LIMIT {
+        lines.push(format!("  and {} more", found.len() - FAULT_LIMIT));
+    }
+    Err(crate::error::coded(
+        "possible_secret",
+        format!(
+            "nothing was imported: {} node(s) in the file look like they hold a secret\n{}\n\
+             Take the secret out of the file. If these are not secrets, run the import again with --allow-secret",
+            found.len(),
+            lines.join("\n")
+        ),
+    ))
+}
+
 /// Load a dump. Every record is checked first; one fault refuses the whole
 /// file and nothing is changed. A node that is already here is replaced only when the
 /// incoming copy is newer. A collection in the file with the same name as a
 /// local collection is merged into the local one. Call [`Dump::upgrade`]
 /// first.
-pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Result<ImportStats> {
+pub fn import(
+    conn: &Connection,
+    an: &Analyzer,
+    meta: &Meta,
+    dump: &Dump,
+    allow_secret: bool,
+) -> Result<ImportStats> {
     if dump.version != DUMP_VERSION {
         bail!("upgrade the export before importing it");
     }
     store::write(conn, || {
         refuse_faults(conn, dump)?;
+        if !allow_secret {
+            refuse_secrets(dump)?;
+        }
         // Rows may arrive before the rows they point at.
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut stats = ImportStats::default();

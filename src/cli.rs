@@ -15,6 +15,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Save text even when it looks like it holds a secret. son refuses
+    /// such a write (a private key, a known token form, a long value after
+    /// password=, token= or api_key=). Use this only when the text is not
+    /// a secret
+    #[arg(long, global = true)]
+    pub allow_secret: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

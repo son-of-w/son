@@ -216,12 +216,51 @@ pub fn path() -> Result<PathBuf> {
     Ok(home.join(".son-of-w").join("son.db"))
 }
 
+/// Make the folder `dir` and the folders above it that are missing. On
+/// macOS and Linux the new folders are for their owner only (mode 0700). A
+/// folder that is there already is left as it is. On Windows the access
+/// rules of the folder above apply.
+pub fn private_dir(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Make an empty file at `path` when there is none. On macOS and Linux it
+/// is for its owner only (mode 0600). A file that is there already is left
+/// as it is: someone may have opened it to others on purpose, and
+/// `son doctor` reports it.
+pub fn private_file(path: &Path) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 /// Open the database, creating and migrating it if needed.
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
+        private_dir(parent).with_context(|| format!("cannot create {}", parent.display()))?;
     }
+    // A new database is made for its owner only. SQLite gives its `-wal`
+    // and `-shm` files the access mode of the database file.
+    private_file(path).with_context(|| format!("cannot create {}", path.display()))?;
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open database {}", path.display()))?;
     conn.busy_timeout(busy_wait())?;

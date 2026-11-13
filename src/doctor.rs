@@ -21,6 +21,9 @@ pub enum Status {
     Missing,
     /// Works, but is behind: an older schema, an index or file out of date.
     Stale,
+    /// Something for the user to look at. son works, and doctor does not
+    /// fail for it: text that looks like a secret, a file others can read.
+    Warning,
     /// Broken: son cannot be relied on until this is put right.
     Problem,
 }
@@ -31,6 +34,7 @@ impl Status {
             Status::Healthy => "healthy",
             Status::Missing => "missing",
             Status::Stale => "stale",
+            Status::Warning => "warning",
             Status::Problem => "problem",
         }
     }
@@ -109,6 +113,7 @@ fn database_checks(path: &Path, checks: &mut Vec<Check>) {
         format!("{} ({bytes} bytes)", path.display()),
         None,
     ));
+    access_check(path, checks);
 
     let current = db::SCHEMA_VERSION;
     checks.push(match version {
@@ -185,6 +190,100 @@ fn database_checks(path: &Path, checks: &mut Vec<Check>) {
     });
     checks.push(index_check(&conn));
     checks.push(record_check(&conn));
+    checks.push(secret_check(&conn));
+}
+
+/// Is the database file, or a file beside it, open to other users of the
+/// machine? Looks only; a file that is wider than its owner is reported
+/// with the command that closes it, and is not changed.
+#[cfg(unix)]
+fn access_check(path: &Path, checks: &mut Vec<Check>) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut wide: Vec<String> = Vec::new();
+    let mut fix: Vec<String> = Vec::new();
+    let mode_of = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| m.permissions().mode() & 0o777)
+    };
+    for suffix in ["", "-wal", "-shm"] {
+        let file = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        if let Some(mode) = mode_of(&file).filter(|mode| mode & 0o077 != 0) {
+            wide.push(format!("{} (mode {mode:o})", file.display()));
+            fix.push(format!("chmod 600 '{}'", file.display()));
+        }
+    }
+    // The folder is looked at only when it is son's own.
+    let own_dir = crate::agents::home().map(|home| home.join(".son-of-w"));
+    if let Some(dir) = path.parent().filter(|dir| Some(*dir) == own_dir.as_deref()) {
+        if let Some(mode) = mode_of(dir).filter(|mode| mode & 0o077 != 0) {
+            wide.push(format!("{} (mode {mode:o})", dir.display()));
+            fix.push(format!("chmod 700 '{}'", dir.display()));
+        }
+    }
+    checks.push(if wide.is_empty() {
+        check(
+            "file access",
+            Status::Healthy,
+            "only the owner can read the database",
+            None,
+        )
+    } else {
+        check(
+            "file access",
+            Status::Warning,
+            format!(
+                "other users of this machine can read: {}. son does not change this by itself",
+                wide.join(", ")
+            ),
+            Some(&fix.join(" && ")),
+        )
+    });
+}
+
+#[cfg(not(unix))]
+fn access_check(_path: &Path, _checks: &mut Vec<Check>) {}
+
+/// Look for stored text that looks like a secret. Only the id, the field
+/// and the kind are reported, never the text.
+fn secret_check(conn: &Connection) -> Check {
+    let Ok(nodes) = crate::store::list_nodes(conn, None, None, true) else {
+        return check("secrets", Status::Problem, "the nodes cannot be read", None);
+    };
+    let found: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| {
+            crate::transfer::secret_in(node)
+                .map(|(field, kind)| format!("`{}` ({field}: {kind})", node.short()))
+        })
+        .collect();
+    if found.is_empty() {
+        return check(
+            "secrets",
+            Status::Healthy,
+            "no stored node looks like it holds a secret (common forms only)",
+            None,
+        );
+    }
+    let listed: Vec<&str> = found.iter().take(20).map(String::as_str).collect();
+    check(
+        "secrets",
+        Status::Warning,
+        format!(
+            "{} node(s) look like they hold a secret: {}{}",
+            found.len(),
+            listed.join(", "),
+            if found.len() > listed.len() {
+                ", and more"
+            } else {
+                ""
+            }
+        ),
+        Some(
+            "for each real secret: change the secret where it is used, then `son drop <id> --purge`. \
+             Backups and exports made before still hold the text",
+        ),
+    )
 }
 
 /// Look for stored nodes that this son could not have written: an id of

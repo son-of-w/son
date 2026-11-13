@@ -27,6 +27,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage. 
 - `src/analyze.rs` — tokenize, split, stem, synonyms
 - `src/store.rs` — nodes, tags, edges, synonyms
 - `src/search.rs` — recall: ranking and graph expansion
+- `src/secrets.rs` — the check for text that looks like a secret, made before a write
 - `src/render.rs` — markdown and JSON output
 - `src/activity.rs` — the activity log, paging, and the numbers for `son stats`
 - `src/review.rs` — `son review`: which nodes need a second look, and why

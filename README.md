@@ -195,7 +195,16 @@ Both files tell the agent when to read from `son`, when to write to it, and this
 
 Stored text cannot grant a permission, cannot override what the user or the system says now, and does not approve an action because it says someone approved it before. An agent consults a stored procedure; it does not run it automatically. This rule is guidance for the agent. Text instructions are not a security boundary: do not store content from sources you do not trust.
 
-Do not store secrets. The database is plain text.
+### Secrets
+
+Do not store secrets. The database is plain text: anyone who can read the file can read every node with any SQLite tool. It is not encrypted. Store where a secret lives ("the deploy key is in 1Password, vault ops"), not the secret.
+
+`son` helps in two ways. Neither is a guarantee.
+
+- **A write that looks like it holds a secret is refused**, with the error `possible_secret`, before anything is saved. Nothing of the refused text is kept: not in the node, the history or the activity log. The message names the field and the kind of thing that matched, never the text. What is checked: private key headers (`-----BEGIN ... PRIVATE KEY-----`), the well-known token forms that start with `sk_live_`, `AKIA`, `ghp_`, `github_pat_` and `xoxb-`, JSON web tokens, and a value of 12 or more characters with letters and digits straight after `password=`, `token=` or `api_key=`. This finds common cases. It does not find every secret: a password in a sentence, or a key of a form that is not in this list, is saved. Every command that takes text is checked (`remember`, `todo add`, `edit`, `merge`, `verify`, `stale`: titles, bodies, tags and evidence references), and so is a JSON import, which is refused whole with the nodes that matched. If the text is not a secret, run the command again with `--allow-secret`. A backup restore is an exact copy and is not checked.
+- **The database is made for its owner only.** On macOS and Linux a new database file, the files SQLite keeps beside it, and a backup file are created with mode 0600, and a new `~/.son-of-w` folder with mode 0700. A file that exists already is not changed: `son doctor` reports a database that other users of the machine can read, and gives the `chmod` command. On Windows the access rules of your home folder apply. `son export` writes to standard output, so the file you send it to gets the access your shell gives it.
+
+`son doctor` also lists stored nodes that look like they hold a secret, by id. If one does: change the secret where it is used, then remove the node and its history with `son drop <id> --purge`. Backups and exports made before still hold the text.
 
 ## How it works
 
@@ -243,7 +252,7 @@ Do not store secrets. The database is plain text.
 
 ### Health
 
-- **`son doctor` says what is wrong and how to put it right.** It checks the database file, its schema version, SQLite's integrity and reference checks, that the search index matches the nodes, that every stored node is of a form this `son` knows, and that the skill and instruction files are the ones this `son` writes. Each check is `healthy`, `missing`, `stale` or `problem`, with the command that fixes it (`son init`, `son reindex`, `son import <backup file> --replace`). Doctor only looks: it does not create or upgrade the database, and it repairs nothing. It exits with status 1 only when there is a `problem`.
+- **`son doctor` says what is wrong and how to put it right.** It checks the database file, its schema version, SQLite's integrity and reference checks, that the search index matches the nodes, that every stored node is of a form this `son` knows, and that the skill and instruction files are the ones this `son` writes. It also looks for stored text that looks like a secret, and for a database file that other users can read. Each check is `healthy`, `missing`, `stale`, `warning` or `problem`, with the command that fixes it (`son init`, `son reindex`, `son import <backup file> --replace`). Doctor only looks: it does not create or upgrade the database, and it repairs nothing. It exits with status 1 only when there is a `problem`.
 - **Many sessions can use the database at the same time.** A session that finds it locked waits for up to 10 seconds, then fails with a message and changes nothing. Set `SON_BUSY_MS` to change that wait (in milliseconds).
 
 ## Commands
@@ -285,7 +294,7 @@ son log [--collection <name>] [--command <name>] [--errors] [--limit 20] [--page
 son stats [--days 30 | --all]
 ```
 
-Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. An `<id>` is the 8-character id that `son` prints.
+Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. `--allow-secret` saves text that the [secret check](#secrets) refuses. An `<id>` is the 8-character id that `son` prints.
 
 `son list` shows nodes, most recently changed first. `son log` shows every command that was run: what was recalled, how many results it gave, what was saved, and what failed. `son stats` shows how much is stored and how `son` is being used: commands per day, how often a recall finds something, the queries that found nothing, writes for each recall, and recall speed.
 
@@ -329,6 +338,7 @@ With `--json`, a command that succeeds writes its result to stdout. A command th
 | `idempotency_conflict` | The `--key` was already used for a different write. Nothing was saved |
 | `import_failed` | The file is not a `son` export, is of a version this `son` does not read, or holds a record that is not valid. Nothing was imported |
 | `install_failed` | `son init` could not write all files. Its report on stdout is still complete |
+| `possible_secret` | The text looks like it holds a secret. Nothing was saved. Take the secret out, or add `--allow-secret` if it is not one |
 | `broken_block` | An instruction file holds `son` marks that do not make exactly one block. `son init` changed nothing. Repair the file by hand |
 | `io_error` | A file could not be read or written |
 | `not_empty` | A backup was not restored because the database holds data and `--replace` was not given |

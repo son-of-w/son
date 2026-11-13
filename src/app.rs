@@ -10,6 +10,7 @@ use crate::error::coded;
 use crate::history::{self, Recorder};
 use crate::render::{self, Context as ProjectContext};
 use crate::search;
+use crate::secrets;
 use crate::store::{self, Meta, NewNode, Node, Ref, TODO_STATUSES};
 use crate::{db, instructions, project, report, setup, transfer};
 use anyhow::{anyhow, bail, Context, Result};
@@ -29,6 +30,8 @@ struct App {
     an: Analyzer,
     meta: Meta,
     json: bool,
+    /// From `--allow-secret`: save text that looks like it holds a secret.
+    allow_secret: bool,
     /// What the running command reports about itself for the activity log.
     draft: RefCell<Draft>,
 }
@@ -153,11 +156,20 @@ pub fn run(cli: Cli) -> Result<()> {
         an: Analyzer::new(),
         meta: Meta::from_env(),
         json: cli.json,
+        allow_secret: cli.allow_secret,
         draft: RefCell::new(Draft::default()),
     };
 
     let logged = log_name(&cli.command).filter(|_| activity::enabled());
     let result = dispatch(&app, &path, cli.command);
+    if result
+        .as_ref()
+        .is_err_and(|err| crate::error::code_of(err) == "possible_secret")
+    {
+        // Nothing of a refused text goes into the log: the title of a
+        // write is its detail, and the title can be what matched.
+        app.note(|draft| draft.detail = None);
+    }
     if let Some((command, write)) = logged {
         // The log must never make a command fail or slow: ignore its errors.
         let _ = activity::record(
@@ -542,6 +554,12 @@ struct Edit {
     unref: Vec<String>,
 }
 
+/// The values of some references as one text, for the secret check.
+fn ref_values(refs: &[Ref]) -> String {
+    let values: Vec<&str> = refs.iter().map(|r| r.value.as_str()).collect();
+    values.join("\n")
+}
+
 fn parse_refs(texts: &[String]) -> Result<Vec<Ref>> {
     texts.iter().map(|text| store::parse_ref(text)).collect()
 }
@@ -705,6 +723,19 @@ impl App {
                     None => {}
                 }
             }
+            // After the key: a repeat of a write that was allowed gives
+            // its first answer again, and is not refused.
+            let ref_text = ref_values(&refs);
+            let tag_text = tags.join(" ");
+            secrets::refuse(
+                self.allow_secret,
+                [
+                    ("title", title),
+                    ("body", body),
+                    ("tags", tag_text.as_str()),
+                    ("evidence reference", ref_text.as_str()),
+                ],
+            )?;
             let mut rec = Recorder::new(&self.conn, "create");
             let id = if kind == NodeType::Collection {
                 if project.is_some() {
@@ -813,6 +844,14 @@ impl App {
         if !clear && checked.is_empty() {
             bail!("say what you checked: --checked \"<what you looked at and what it showed>\"");
         }
+        let ref_text = ref_values(&added);
+        secrets::refuse(
+            self.allow_secret,
+            [
+                ("--checked text", checked),
+                ("evidence reference", ref_text.as_str()),
+            ],
+        )?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         if node.kind == "collection" {
@@ -930,6 +969,17 @@ impl App {
             );
         }
         let (refs, unref) = (parse_refs(&refs)?, parse_refs(&unref)?);
+        let ref_text = ref_values(&refs);
+        let tag_text = tags.as_deref().unwrap_or_default().join(" ");
+        secrets::refuse(
+            self.allow_secret,
+            [
+                ("title", title.as_deref().unwrap_or_default()),
+                ("body", body.as_deref().unwrap_or_default()),
+                ("tags", tag_text.as_str()),
+                ("evidence reference", ref_text.as_str()),
+            ],
+        )?;
         let id = store::resolve_id(&self.conn, id)?;
         let changed = store::write(&self.conn, || {
             let mut rec = Recorder::new(&self.conn, "edit");
@@ -1107,6 +1157,7 @@ impl App {
         if !clear && reason.is_empty() {
             bail!("say why it is out of date: --reason \"<text>\"");
         }
+        secrets::refuse(self.allow_secret, [("--reason text", reason)])?;
         if node.kind == "collection" {
             bail!("a collection is a container; mark the nodes in it");
         }
@@ -1215,6 +1266,13 @@ impl App {
         if title.as_deref() == Some("") {
             bail!("the title is empty");
         }
+        secrets::refuse(
+            self.allow_secret,
+            [
+                ("title", title.as_deref().unwrap_or_default()),
+                ("body", body.as_deref().unwrap_or_default()),
+            ],
+        )?;
         let moved = store::write(&self.conn, || {
             let source = store::get_node(&self.conn, &source_id)?;
             let mut survivor = store::get_node(&self.conn, &survivor_id)?;
@@ -1600,7 +1658,7 @@ impl App {
         })?;
         dump.upgrade()?;
         self.note(|draft| draft.detail = Some(file.to_string()));
-        let stats = transfer::import(&self.conn, &self.an, &self.meta, &dump)?;
+        let stats = transfer::import(&self.conn, &self.an, &self.meta, &dump, self.allow_secret)?;
         self.note(|draft| draft.results = Some((stats.added + stats.updated) as i64));
         if self.json {
             render::print_json(&serde_json::to_value(&stats)?);
