@@ -2808,6 +2808,142 @@ fn completions_are_printed_for_each_shell_with_no_database() {
     assert!(!sb.root.join("son.db").exists());
 }
 
+#[test]
+fn seed_lists_the_users_own_files_and_changes_nothing() {
+    let sb = Sandbox::new("seed");
+    let home = sb.root.join("home");
+    let alpha = sb.root.join("alpha");
+    let write = |path: &std::path::Path, text: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    let paths = |args: &[&str]| -> Vec<(String, Value)> {
+        let mut full = vec!["--json", "seed"];
+        full.extend(args);
+        sb.ok("alpha", &full).json()["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["path"].as_str().unwrap().replace('\\', "/"), f.clone()))
+            .collect()
+    };
+
+    // Nothing of the user's own yet.
+    assert!(paths(&[]).is_empty());
+    assert!(sb
+        .ok("alpha", &["seed"])
+        .stdout
+        .contains("No file was found"));
+
+    write(
+        &home.join(".claude/CLAUDE.md"),
+        "# My rules\n\nWe deploy on Fridays.\n",
+    );
+    write(
+        &alpha.join("AGENTS.md"),
+        "# Project\n\nTests run with make check.\n",
+    );
+    write(&alpha.join(".cursor/rules/style.mdc"), "Use tabs.\n");
+    write(
+        &alpha.join(".github/copilot-instructions.md"),
+        "Be short.\n",
+    );
+    // Claude Code keeps memory files for a project under its own folder.
+    let project_name: String = std::fs::canonicalize(&alpha)
+        .unwrap()
+        .display()
+        .to_string()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let memory = home
+        .join(".claude/projects")
+        .join(&project_name)
+        .join("memory");
+    write(&memory.join("MEMORY.md"), "- [A rule](a-rule.md)\n");
+    write(&memory.join("a-rule.md"), "Never push on Friday.\n");
+    // Set up son: its skill is not the user's own, and a file that holds
+    // only the block is not either.
+    let init = sb
+        .ok("alpha", &["init", "-a", "claude-code,codex", "-g"])
+        .stdout;
+    assert!(init.contains("ask your agent to run `son seed`"), "{init}");
+
+    let found = paths(&[]);
+    let names: Vec<&str> = found.iter().map(|(path, _)| path.as_str()).collect();
+    for want in [
+        "home/.claude/CLAUDE.md",
+        "alpha/AGENTS.md",
+        "alpha/.cursor/rules/style.mdc",
+        "alpha/.github/copilot-instructions.md",
+        "memory/MEMORY.md",
+        "memory/a-rule.md",
+    ] {
+        assert!(
+            names.iter().any(|n| n.ends_with(want)),
+            "{want} is not in {names:?}"
+        );
+    }
+    assert!(!names.iter().any(|n| n.ends_with("SKILL.md")), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n.ends_with(".codex/AGENTS.md")),
+        "{names:?}"
+    );
+    assert_eq!(names.len(), 6, "{names:?}");
+    let global = &found
+        .iter()
+        .find(|(p, _)| p.ends_with("home/.claude/CLAUDE.md"))
+        .unwrap()
+        .1;
+    assert_eq!(global["scope"], "global");
+    assert_eq!(global["son_block"], true);
+    assert!(global["bytes"].as_u64().unwrap() > 30);
+
+    // The text for the agent says what to do, and that nothing was saved.
+    let text = sb.ok("alpha", &["seed"]).stdout;
+    for want in [
+        "NOTHING WAS SAVED",
+        "--check",
+        "--evidence observation --ref file:",
+        "Leave out the son block",
+        "possible_secret",
+        "current collection (alpha)",
+        "Ask the user first",
+    ] {
+        assert!(text.contains(want), "'{want}' is missing from:\n{text}");
+    }
+    let json = sb
+        .ok("alpha", &["--json", "seed", "--collection", "notes"])
+        .json();
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["collection"], "notes");
+    assert!(json["instructions"].as_array().unwrap().len() >= 6);
+
+    // A folder the user names: note files in it and below, and no others.
+    let notes = sb.root.join("notes");
+    write(&notes.join("a.md"), "one\n");
+    write(&notes.join("deep/b.txt"), "two\n");
+    write(&notes.join("deep/c.png"), "not a note\n");
+    write(&notes.join(".hidden/d.md"), "hidden\n");
+    write(&notes.join("node_modules/e.md"), "not mine\n");
+    write(&notes.join("empty.md"), "  \n");
+    let found = paths(&[notes.to_str().unwrap()]);
+    let names: Vec<&str> = found.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names[0].ends_with("notes/a.md") && names[1].ends_with("notes/deep/b.txt"));
+    assert!(!sb.son("alpha", &["seed", "/no/such/folder"]).ok);
+
+    // It only reads: every file is as it was, and a database that is not
+    // there is not made.
+    assert_eq!(
+        std::fs::read_to_string(alpha.join("AGENTS.md")).unwrap(),
+        "# Project\n\nTests run with make check.\n"
+    );
+    let empty = Sandbox::new("seed-empty");
+    empty.ok("alpha", &["seed"]);
+    assert!(!empty.root.join("son.db").exists());
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

@@ -17,6 +17,7 @@ pub mod report;
 pub mod review;
 pub mod search;
 pub mod secrets;
+pub mod seed;
 pub mod setup;
 pub mod store;
 pub mod transfer;

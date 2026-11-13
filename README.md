@@ -189,6 +189,16 @@ son init --yes
 
 `--yes` takes the detected agents and the global scope. `--scope project` installs into the current project (the git root). Other flags: `--list-agents`, `--skill-only`, `--db-only`, `--print-skill`, `--print-block`.
 
+### Start with what you already wrote
+
+A new database is empty, and `son` shows its worth only when something is stored. You probably have text for your agents already: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, Cursor rules, Copilot instructions, and the memory files that Claude Code keeps for a project. Ask your agent to run:
+
+```bash
+son seed
+```
+
+`son seed` saves nothing and changes no file. It lists the files it finds for the current project and for all projects, with their sizes, and tells the agent how to bring them in: read each file, pick what holds for a long time (decisions, patterns, facts), check for a duplicate with `--check`, and save each piece as its own node with `--evidence observation --ref file:<path>`. The agent does this because `son` has no model and cannot tell a decision from a remark; a rule that made one node for each heading would fill the store with noise. The `son` block and secrets are left out. For a folder of plain notes, name it: `son seed ~/notes` lists the `.md` and `.txt` files in it and below. `son init` tells you when such files exist, and the skill tells an agent to offer this once when `son context` is empty. Nothing is brought in unless you ask.
+
 ### Shell completion
 
 If you type `son` commands yourself, your shell can complete the commands and flags. Agents do not need this. A package manager that has a place for completion scripts installs them for you. Otherwise, run the line for your shell once:
@@ -327,6 +337,7 @@ son collections
 son synonym add <term> <canonical> | list | remove <term>
 son export [--collection <name>] [--tag a,b]   markdown; add --json for the portable format
 son tags [--collection <name>]             the tags in use, with counts
+son seed [<folder>]                        list files you already wrote, to bring into son
 son completions <bash|zsh|fish|powershell> print a completion script for your shell
 son import <file|-> [--replace]            merge a JSON export, or restore a backup
 son backup <file|folder>                   write a full copy of the database

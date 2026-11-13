@@ -316,6 +316,14 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
         println!(
             "\nRun `son init` again at any time to add agents or bring these files up to date."
         );
+        // The memory starts empty. Say so when there is something to put in.
+        let own = crate::seed::candidates().map(|f| f.len()).unwrap_or(0);
+        if own > 0 {
+            println!(
+                "You already have {own} file(s) of instructions or notes for your agents. \
+                 To bring what is in them into son, ask your agent to run `son seed`."
+            );
+        }
     }
     if failed > 0 {
         // With --json the report above went to stdout as one valid object;

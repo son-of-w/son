@@ -46,6 +46,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         Command::Init { .. }
         | Command::Uninstall { .. }
         | Command::Completions { .. }
+        | Command::Seed { .. }
         | Command::Doctor
         | Command::List { .. }
         | Command::Log { .. }
@@ -113,6 +114,14 @@ pub fn run(cli: Cli) -> Result<()> {
         use clap::CommandFactory;
         clap_complete::generate(*shell, &mut Cli::command(), "son", &mut std::io::stdout());
         return Ok(());
+    }
+    if let Command::Seed { folder, collection } = &cli.command {
+        // Only reads files. No database is opened or made.
+        return crate::seed::run(
+            folder.as_deref(),
+            &project_name(collection.as_deref())?,
+            cli.json,
+        );
     }
     if let Command::Uninstall {
         agent,
@@ -470,6 +479,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Uninstall { .. } => {
             unreachable!("uninstall runs before the database is opened")
         }
+        Command::Seed { .. } => unreachable!("seed runs before the database is opened"),
         Command::Completions { .. } => {
             unreachable!("completions are printed before the database is opened")
         }

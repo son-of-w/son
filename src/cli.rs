@@ -165,6 +165,19 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// List the files you already wrote for your agents, to bring into son
+    ///
+    /// This changes nothing. It lists the instruction files, rule files
+    /// and Claude Code memory files it finds for this project and for all
+    /// projects, and tells the agent how to save what is worth keeping,
+    /// node by node. Name a folder to list the note files in it.
+    Seed {
+        /// A folder of notes to list (.md and .txt files in it and below)
+        folder: Option<String>,
+        /// The collection that the instructions name (default: the current one)
+        #[arg(long)]
+        collection: Option<String>,
+    },
     /// Print a completion script for your shell
     ///
     /// The script completes the commands and flags of son. It is for the
