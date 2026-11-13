@@ -1726,6 +1726,247 @@ fn json_error(sb: &Sandbox, dir: &str, args: &[&str]) -> (i32, Value) {
 }
 
 #[test]
+fn import_refuses_a_file_with_a_bad_record_and_changes_nothing() {
+    let sb = Sandbox::new("import-valid");
+    sb.ok("alpha", &["remember", "fact", "Stored before the import"]);
+    let export = sb.ok("alpha", &["--json", "export"]).stdout;
+    let good: Value = serde_json::from_str(&export).unwrap();
+    let file = sb.root.join("in.json");
+    let state = || sb.ok("alpha", &["--json", "export"]).json()["nodes"].clone();
+    let before = state();
+
+    let col = "01JVAL0000000000000000C0L1";
+    let t = "2026-11-01T00:00:00.000Z";
+    let base = |nodes: Value, edges: Value| serde_json::json!({"version": 2, "exported_at": t, "nodes": nodes, "edges": edges});
+    let collection = serde_json::json!(
+        {"id": col, "type": "collection", "title": "valid", "created_at": t, "updated_at": t});
+    let note = |id: &str| {
+        serde_json::json!({"id": id, "type": "note", "title": "A note", "collection_id": col,
+                           "created_at": t, "updated_at": t})
+    };
+    let with = |change: &dyn Fn(&mut Value)| {
+        let mut node = note("01JVAL0000000000000000N0T1");
+        change(&mut node);
+        base(serde_json::json!([collection, node]), serde_json::json!([]))
+    };
+    let edge = |from: &str, to: &str, relation: &str| {
+        base(
+            serde_json::json!([
+                collection,
+                note("01JVAL0000000000000000N0T1"),
+                note("01JVAL0000000000000000N0T2")
+            ]),
+            serde_json::json!([{"from_id": from, "to_id": to, "relation": relation, "created_at": t}]),
+        )
+    };
+
+    let cases: Vec<(Value, &str)> = vec![
+        (
+            with(&|n| n["id"] = "漢漢漢".into()),
+            "the id is not 26 characters",
+        ),
+        (
+            with(&|n| n["id"] = "01jval0000000000000000n0t1".into()),
+            "the id is not 26 characters",
+        ),
+        (
+            with(&|n| n["type"] = "memo".into()),
+            "type 'memo' is not known",
+        ),
+        (with(&|n| n["title"] = "  ".into()), "the title is empty"),
+        (
+            with(&|n| n["status"] = "paused".into()),
+            "status 'paused' is not known",
+        ),
+        (
+            with(&|n| n["type"] = "todo".into()),
+            "a todo needs a status",
+        ),
+        (
+            with(&|n| n["created_at"] = "yesterday".into()),
+            "created_at 'yesterday' is not a time",
+        ),
+        (
+            with(&|n| n["updated_at"] = "2026-13-01T00:00:00Z".into()),
+            "updated_at",
+        ),
+        (with(&|n| n["stale_at"] = "2026-11-01".into()), "stale_at"),
+        (
+            with(&|n| n["evidence"] = "rumor".into()),
+            "evidence 'rumor' is not known",
+        ),
+        (
+            with(&|n| n["refs"] = serde_json::json!([{"kind": "book", "value": "x"}])),
+            "reference kind 'book' is not known",
+        ),
+        (
+            with(&|n| n["tags"] = serde_json::json!(["a,b"])),
+            "a tag holds a comma",
+        ),
+        (with(&|n| n["rev"] = 0.into()), "rev 0 is less than 1"),
+        (
+            with(&|n| n["merged_into"] = "nope".into()),
+            "merged_into is not an id",
+        ),
+        (
+            with(&|n| {
+                n.as_object_mut().unwrap().remove("collection_id");
+            }),
+            "the node is in no collection",
+        ),
+        (
+            with(&|n| n["collection_id"] = "01JVAL0000000000000000XXXX".into()),
+            "not in the file and not stored here",
+        ),
+        (
+            base(
+                serde_json::json!([collection, note("01JVAL0000000000000000N0T1"), {
+                    "id": "01JVAL0000000000000000N0T2", "type": "note", "title": "In a note",
+                    "collection_id": "01JVAL0000000000000000N0T1", "created_at": t, "updated_at": t}]),
+                serde_json::json!([]),
+            ),
+            "points at a note, not at a collection",
+        ),
+        (
+            base(
+                serde_json::json!([
+                    collection,
+                    note("01JVAL0000000000000000N0T1"),
+                    note("01JVAL0000000000000000N0T1")
+                ]),
+                serde_json::json!([]),
+            ),
+            "the id is in the file more than once",
+        ),
+        (
+            edge(
+                "01JVAL0000000000000000N0T1",
+                "01JVAL0000000000000000N0T2",
+                "likes",
+            ),
+            "relation 'likes' is not known",
+        ),
+        (
+            edge(
+                "01JVAL0000000000000000N0T1",
+                "01JVAL0000000000000000N0T1",
+                "relates_to",
+            ),
+            "a node is linked to itself",
+        ),
+        (
+            edge("x", "01JVAL0000000000000000N0T2", "relates_to"),
+            "from_id or to_id is not an id",
+        ),
+    ];
+    for (dump, fault) in &cases {
+        std::fs::write(&file, dump.to_string()).unwrap();
+        let output = sb
+            .command("alpha", &["--json", "import", file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{fault}");
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "import_failed", "{fault}");
+        let message = error["error"]["message"].as_str().unwrap();
+        assert!(message.contains(fault), "want '{fault}' in: {message}");
+        assert!(message.contains("nothing was imported"));
+        // The valid records of the same file were not saved either.
+        assert_eq!(state(), before, "{fault}");
+    }
+
+    // Many faults: the first twenty are listed, the rest are counted.
+    let many: Vec<Value> = (0..30)
+        .map(|i| {
+            let mut node = note(&format!("01JVAL0000000000000000M{i:03}"));
+            node["type"] = "memo".into();
+            node
+        })
+        .chain([collection.clone()])
+        .collect();
+    std::fs::write(&file, base(many.into(), serde_json::json!([])).to_string()).unwrap();
+    let out = sb.son("alpha", &["import", file.to_str().unwrap()]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("30 fault(s)") && out.stderr.contains("and 10 more"));
+    assert_eq!(
+        out.stderr.matches("type 'memo'").count(),
+        20,
+        "{}",
+        out.stderr
+    );
+
+    // A field this son does not know is ignored, and a good file imports.
+    let mut extra = with(&|n| n["from_the_future"] = "kept out".into());
+    extra["also_new"] = 1.into();
+    std::fs::write(&file, extra.to_string()).unwrap();
+    sb.ok("alpha", &["import", file.to_str().unwrap()]);
+    std::fs::write(&file, good.to_string()).unwrap();
+    sb.ok("alpha", &["import", file.to_str().unwrap()]);
+    // A node cannot change its type through an import.
+    let mut changed = with(&|n| n["type"] = "fact".into());
+    changed["nodes"][1]["updated_at"] = "2027-01-01T00:00:00.000Z".into();
+    std::fs::write(&file, changed.to_string()).unwrap();
+    let out = sb.son("alpha", &["import", file.to_str().unwrap()]);
+    assert!(
+        out.stderr.contains("stored here as a note"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn a_stored_row_of_an_unknown_form_does_not_crash_and_doctor_names_it() {
+    let sb = Sandbox::new("bad-row");
+    sb.ok("alpha", &["remember", "fact", "A good fact"]);
+    let conn = rusqlite::Connection::open(sb.root.join("son.db")).unwrap();
+    conn.execute_batch(
+        "INSERT INTO nodes (id, type, title, body, project_id, created_at, updated_at) \
+         SELECT '漢漢漢', 'fact', 'Bad id', '', project_id, created_at, updated_at \
+         FROM nodes WHERE type = 'fact';",
+    )
+    .unwrap();
+    drop(conn);
+
+    for args in [
+        vec!["--json", "list"],
+        vec!["list"],
+        vec!["context"],
+        vec!["--json", "export"],
+        vec!["export"],
+        vec!["review"],
+        vec!["show", "漢漢漢"],
+    ] {
+        let out = sb.son("alpha", &args);
+        assert!(out.ok, "son {args:?} failed: {}", out.stderr);
+    }
+    let report = sb.son("alpha", &["--json", "doctor"]);
+    assert!(!report.ok);
+    let report: Value = serde_json::from_str(&report.stdout).unwrap();
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "records")
+        .unwrap();
+    assert_eq!(check["status"], "problem");
+    assert!(check["detail"].as_str().unwrap().contains("漢漢漢"));
+    assert!(check["fix"].as_str().unwrap().contains("--purge"));
+
+    // The fix that doctor names works.
+    sb.ok("alpha", &["drop", "漢漢漢", "--purge"]);
+    let report = sb.ok("alpha", &["--json", "doctor"]).json();
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "records")
+        .unwrap()
+        .clone();
+    assert_eq!(check["status"], "healthy");
+}
+
+#[test]
 fn json_errors_have_stable_codes_on_stderr() {
     let sb = Sandbox::new("json-errors");
     let file = sb.root.join("two.json");

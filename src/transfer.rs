@@ -173,7 +173,246 @@ pub struct ImportStats {
     pub synonyms: usize,
 }
 
-/// Load a dump. A node that is already here is replaced only when the
+/// How many faults an import error lists before it only counts them.
+const FAULT_LIMIT: usize = 20;
+/// The types a node can have.
+pub const NODE_TYPES: [&str; 6] = ["collection", "todo", "decision", "pattern", "fact", "note"];
+
+/// True for an id of the form `son` makes: 26 characters, each a digit or
+/// an uppercase letter of the basic alphabet.
+pub fn is_id(id: &str) -> bool {
+    id.len() == 26
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
+}
+
+/// True for a time as `son` writes it: `2026-11-13T09:30:00.123Z`. The
+/// part after the seconds can be left out.
+pub fn is_time(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let number = |from: usize, to: usize| -> Option<u32> {
+        let part = bytes.get(from..to)?;
+        if !part.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(part).ok()?.parse().ok()
+    };
+    let mark = |at: usize, want: u8| bytes.get(at) == Some(&want);
+    let parts = (
+        number(0, 4),
+        number(5, 7),
+        number(8, 10),
+        number(11, 13),
+        number(14, 16),
+        number(17, 19),
+    );
+    let (Some(_), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = parts else {
+        return false;
+    };
+    if !(mark(4, b'-') && mark(7, b'-') && mark(10, b'T') && mark(13, b':') && mark(16, b':')) {
+        return false;
+    }
+    if !((1..=12).contains(&month) && (1..=31).contains(&day)) {
+        return false;
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    match &bytes[19..] {
+        [b'Z'] => true,
+        [b'.', digits @ .., b'Z'] => !digits.is_empty() && digits.iter().all(u8::is_ascii_digit),
+        _ => false,
+    }
+}
+
+/// A value for an error message: cut short, and safe to print.
+fn shown(text: &str) -> String {
+    let mut out: String = text.chars().take(40).flat_map(char::escape_debug).collect();
+    if text.chars().count() > 40 {
+        out.push('…');
+    }
+    out
+}
+
+/// What is wrong with one node, looked at by itself. Empty when nothing
+/// is. `son doctor` uses this for stored rows too.
+pub fn node_faults(node: &Node) -> Vec<String> {
+    let mut faults = Vec::new();
+    if !is_id(&node.id) {
+        faults.push(
+            "the id is not 26 characters of digits and uppercase letters, the form son makes"
+                .to_string(),
+        );
+    }
+    if !NODE_TYPES.contains(&node.kind.as_str()) {
+        faults.push(format!("type '{}' is not known", shown(&node.kind)));
+    }
+    if node.title.trim().is_empty() {
+        faults.push("the title is empty".to_string());
+    }
+    match (&node.status, node.kind.as_str()) {
+        (None, "todo") => faults.push("a todo needs a status".to_string()),
+        (Some(status), _) if !store::TODO_STATUSES.contains(&status.as_str()) => {
+            faults.push(format!("status '{}' is not known", shown(status)));
+        }
+        _ => {}
+    }
+    match (&node.project_id, node.kind.as_str()) {
+        (Some(_), "collection") => {
+            faults.push("a collection cannot be in a collection".to_string())
+        }
+        (None, kind) if kind != "collection" => {
+            faults.push("the node is in no collection".to_string());
+        }
+        (Some(id), _) if !is_id(id) => faults.push("collection_id is not an id".to_string()),
+        _ => {}
+    }
+    let times = [
+        ("created_at", Some(&node.created_at)),
+        ("updated_at", Some(&node.updated_at)),
+        ("deleted_at", node.deleted_at.as_ref()),
+        ("verified_at", node.verified_at.as_ref()),
+        ("stale_at", node.stale_at.as_ref()),
+    ];
+    for (name, value) in times {
+        if let Some(value) = value {
+            if !is_time(value) {
+                faults.push(format!(
+                    "{name} '{}' is not a time such as 2026-11-13T09:30:00.000Z",
+                    shown(value)
+                ));
+            }
+        }
+    }
+    if let Some(evidence) = &node.evidence {
+        if !store::EVIDENCE.contains(&evidence.as_str()) {
+            faults.push(format!("evidence '{}' is not known", shown(evidence)));
+        }
+    }
+    for r in &node.refs {
+        if !store::REF_KINDS.contains(&r.kind.as_str()) {
+            faults.push(format!("reference kind '{}' is not known", shown(&r.kind)));
+        } else if r.value.trim().is_empty() {
+            faults.push("a reference has no value".to_string());
+        }
+    }
+    if node.tags.iter().any(|tag| tag.contains(',')) {
+        faults.push("a tag holds a comma".to_string());
+    }
+    if let Some(id) = &node.merged_into {
+        if !is_id(id) {
+            faults.push("merged_into is not an id".to_string());
+        }
+    }
+    if node.rev < 1 {
+        faults.push(format!("rev {} is less than 1", node.rev));
+    }
+    faults
+}
+
+/// Every fault in the file, each with the place of its record. Looks at
+/// the records one by one, and at how they point at each other and at the
+/// nodes stored here.
+fn faults(conn: &Connection, dump: &Dump) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    let kinds: HashMap<&str, &str> = dump
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.kind.as_str()))
+        .collect();
+    let stored_kind = |id: &str| -> Result<Option<String>> {
+        Ok(conn
+            .query_row("SELECT type FROM nodes WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?)
+    };
+    for (at, node) in dump.nodes.iter().enumerate() {
+        let place = format!("nodes[{at}] (id '{}')", shown(&node.id));
+        for fault in node_faults(node) {
+            found.push(format!("{place}: {fault}"));
+        }
+        if !seen.insert(node.id.as_str()) {
+            found.push(format!("{place}: the id is in the file more than once"));
+        }
+        if let Some(stored) = stored_kind(&node.id)? {
+            if stored != node.kind && NODE_TYPES.contains(&node.kind.as_str()) {
+                found.push(format!(
+                    "{place}: the node is stored here as a {stored}, and the file says {}",
+                    node.kind
+                ));
+            }
+        }
+        if let Some(parent) = node.project_id.as_deref().filter(|id| is_id(id)) {
+            let kind = match kinds.get(parent) {
+                Some(kind) => Some(kind.to_string()),
+                None => stored_kind(parent)?,
+            };
+            match kind.as_deref() {
+                Some("collection") => {}
+                Some(other) => found.push(format!(
+                    "{place}: collection_id points at a {}, not at a collection",
+                    shown(other)
+                )),
+                None => found.push(format!(
+                    "{place}: collection_id points at a node that is not in the file and not stored here"
+                )),
+            }
+        }
+    }
+    for (at, edge) in dump.edges.iter().enumerate() {
+        let place = format!("edges[{at}]");
+        if !is_id(&edge.from_id) || !is_id(&edge.to_id) {
+            found.push(format!("{place}: from_id or to_id is not an id"));
+        } else if edge.from_id == edge.to_id {
+            found.push(format!("{place}: a node is linked to itself"));
+        }
+        if !store::RELATIONS.contains(&edge.relation.as_str()) {
+            found.push(format!(
+                "{place}: relation '{}' is not known",
+                shown(&edge.relation)
+            ));
+        }
+        if !is_time(&edge.created_at) {
+            found.push(format!("{place}: created_at is not a time"));
+        }
+    }
+    for (at, synonym) in dump.synonyms.iter().enumerate() {
+        if synonym.term.trim().is_empty() || synonym.canonical.trim().is_empty() {
+            found.push(format!("synonyms[{at}]: the term or its meaning is empty"));
+        }
+    }
+    Ok(found)
+}
+
+/// Stop an import that holds a record this `son` cannot keep safely.
+fn refuse_faults(conn: &Connection, dump: &Dump) -> Result<()> {
+    let found = faults(conn, dump)?;
+    if found.is_empty() {
+        return Ok(());
+    }
+    let mut lines: Vec<String> = found
+        .iter()
+        .take(FAULT_LIMIT)
+        .map(|f| format!("  {f}"))
+        .collect();
+    if found.len() > FAULT_LIMIT {
+        lines.push(format!("  and {} more", found.len() - FAULT_LIMIT));
+    }
+    Err(crate::error::coded(
+        "import_failed",
+        format!(
+            "nothing was imported: the file holds {} fault(s)
+{}
+             A value that is not known can mean the file is from a newer son.",
+            found.len(),
+            lines.join("\n")
+        ),
+    ))
+}
+
+/// Load a dump. Every record is checked first; one fault refuses the whole
+/// file and nothing is changed. A node that is already here is replaced only when the
 /// incoming copy is newer. A collection in the file with the same name as a
 /// local collection is merged into the local one. Call [`Dump::upgrade`]
 /// first.
@@ -182,6 +421,7 @@ pub fn import(conn: &Connection, an: &Analyzer, meta: &Meta, dump: &Dump) -> Res
         bail!("upgrade the export before importing it");
     }
     store::write(conn, || {
+        refuse_faults(conn, dump)?;
         // Rows may arrive before the rows they point at.
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut stats = ImportStats::default();

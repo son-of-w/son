@@ -169,7 +169,10 @@ impl Node {
 /// a timestamp: every node made in the same second shares its first 8
 /// characters, while the last 8 are random.
 pub fn short_id(id: &str) -> String {
-    id[id.len().saturating_sub(8)..].to_lowercase()
+    // By characters, not bytes: a stored id that is not of son's form must
+    // give an odd line of output, not a crash.
+    let skip = id.chars().count().saturating_sub(8);
+    id.chars().skip(skip).collect::<String>().to_lowercase()
 }
 
 pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
@@ -259,6 +262,16 @@ pub fn write<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
 /// Turn what the user typed into a full id. Accepts the full ULID or any
 /// unique run of 4 or more characters from its end, in either case.
 pub fn resolve_id(conn: &Connection, input: &str) -> Result<String> {
+    // A full id as it is stored is always accepted, so that a row with an
+    // id that is not of son's form can still be named, and dropped.
+    let exact: Option<String> = conn
+        .query_row("SELECT id FROM nodes WHERE id = ?1", [input.trim()], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(id) = exact {
+        return Ok(id);
+    }
     let needle = input.trim().trim_matches('`').to_uppercase();
     if needle.len() < 4 || !needle.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(coded(

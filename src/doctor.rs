@@ -184,6 +184,55 @@ fn database_checks(path: &Path, checks: &mut Vec<Check>) {
         ),
     });
     checks.push(index_check(&conn));
+    checks.push(record_check(&conn));
+}
+
+/// Look for stored nodes that this son could not have written: an id of
+/// another form, a type or a status it does not know. An import of an
+/// older son could store such rows.
+fn record_check(conn: &Connection) -> Check {
+    let nodes = match crate::store::list_nodes(conn, None, None, true) {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            return check(
+                "records",
+                Status::Problem,
+                format!("the nodes cannot be read: {err:#}"),
+                Some("restore a backup: son import <backup file> --replace"),
+            )
+        }
+    };
+    let bad: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| {
+            let faults = crate::transfer::node_faults(node);
+            (!faults.is_empty()).then(|| format!("'{}' ({})", node.id, faults.join("; ")))
+        })
+        .collect();
+    if bad.is_empty() {
+        return check(
+            "records",
+            Status::Healthy,
+            format!("{} nodes, all of a form this son knows", nodes.len()),
+            None,
+        );
+    }
+    let listed: Vec<&str> = bad.iter().take(10).map(String::as_str).collect();
+    check(
+        "records",
+        Status::Problem,
+        format!(
+            "{} node(s) are not of a form this son knows: {}{}",
+            bad.len(),
+            listed.join(", "),
+            if bad.len() > listed.len() {
+                ", and more"
+            } else {
+                ""
+            }
+        ),
+        Some("for each one: son drop '<id>' --purge (give the full id as shown)"),
+    )
 }
 
 /// Compare the search index with the nodes: each live node has one row,
