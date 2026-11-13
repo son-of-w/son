@@ -1749,8 +1749,8 @@ impl App {
             render::print_json(&serde_json::to_value(&stats)?);
         } else {
             println!(
-                "imported: {} added, {} updated, {} unchanged, {} collections merged by name, {} links, {} synonyms",
-                stats.added, stats.updated, stats.unchanged, stats.merged_collections, stats.edges, stats.synonyms
+                "imported: {} added, {} updated, {} unchanged, {} collections merged by name, {} links, {} synonyms, {} with a stale mark or verification changed",
+                stats.added, stats.updated, stats.unchanged, stats.merged_collections, stats.edges, stats.synonyms, stats.freshness
             );
         }
         Ok(())

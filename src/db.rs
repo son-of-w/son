@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The schema version this son reads and writes.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -210,6 +210,19 @@ ALTER TABLE nodes ADD COLUMN stale_note TEXT;
 /// NULL means none was given; every older todo has none.
 const SCHEMA_V10: &str = "
 ALTER TABLE nodes ADD COLUMN priority TEXT;
+";
+
+/// Version 11: the time of the last change to a node's stale mark or
+/// verification, a set or a clear. An import compares it to know which
+/// copy has the later marks; without it a clear leaves no trace. Older
+/// nodes get the later of their two mark times, or NULL when they have
+/// no mark.
+const SCHEMA_V11: &str = "
+ALTER TABLE nodes ADD COLUMN freshness_at TEXT;
+UPDATE nodes SET freshness_at = CASE
+    WHEN verified_at IS NULL THEN stale_at
+    WHEN stale_at IS NULL THEN verified_at
+    ELSE max(verified_at, stale_at) END;
 ";
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
@@ -623,6 +636,9 @@ fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
         }
         if version < 10 {
             conn.execute_batch(SCHEMA_V10)?;
+        }
+        if version < 11 {
+            conn.execute_batch(SCHEMA_V11)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

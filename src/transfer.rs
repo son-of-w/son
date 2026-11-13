@@ -167,6 +167,9 @@ pub struct ImportStats {
     pub added: usize,
     pub updated: usize,
     pub unchanged: usize,
+    /// Nodes whose stale mark or verification was taken from the file,
+    /// or kept from here against a file with newer content.
+    pub freshness: usize,
     /// Collections in the file that matched a local collection of the same name.
     pub merged_collections: usize,
     pub edges: usize,
@@ -274,6 +277,7 @@ pub fn node_faults(node: &Node) -> Vec<String> {
         ("deleted_at", node.deleted_at.as_ref()),
         ("verified_at", node.verified_at.as_ref()),
         ("stale_at", node.stale_at.as_ref()),
+        ("freshness_at", node.freshness_at.as_ref()),
     ];
     for (name, value) in times {
         if let Some(value) = value {
@@ -525,30 +529,41 @@ pub fn import(
                 continue;
             }
             rec.touch(&node.id)?;
-            match stored_updated_at(conn, &node.id)? {
-                Some(stored) if stored >= node.updated_at => {
-                    // The content here is as new or newer. A verification
-                    // is apart from the content: take it when it is newer,
-                    // and keep every reference to evidence from both.
-                    let newer_check = conn.execute(
-                        "UPDATE nodes SET verified_at = ?2, verified_by = ?3, verified_note = ?4 \
-                         WHERE id = ?1 AND ?2 IS NOT NULL AND (verified_at IS NULL OR verified_at < ?2)",
-                        params![node.id, node.verified_at, node.verified_by, node.verified_note],
+            let stored = store::find_node(conn, &node.id)?;
+            // The content: the copy that was edited last stays or comes in.
+            let take_content = stored
+                .as_ref()
+                .is_none_or(|stored| stored.updated_at < node.updated_at);
+            // The marks (stale and verification, as one unit) are apart
+            // from the content: see `marks_from_file`.
+            let take_marks = stored
+                .as_ref()
+                .is_none_or(|stored| marks_from_file(stored, node));
+            if let Some(stored) = stored.as_ref().filter(|_| !take_content) {
+                // The content here is as new or newer. Keep every
+                // reference to evidence from both.
+                let mut new_refs = 0;
+                for r in &node.refs {
+                    new_refs += conn.execute(
+                        "INSERT OR IGNORE INTO refs (node_id, kind, value, created_at) VALUES (?1, ?2, ?3, ?4)",
+                        params![node.id, r.kind, r.value, node.updated_at],
                     )?;
-                    let mut new_refs = 0;
-                    for r in &node.refs {
-                        new_refs += conn.execute(
-                            "INSERT OR IGNORE INTO refs (node_id, kind, value, created_at) VALUES (?1, ?2, ?3, ?4)",
-                            params![node.id, r.kind, r.value, node.updated_at],
-                        )?;
-                    }
-                    if newer_check + new_refs > 0 {
-                        stats.updated += 1;
-                    } else {
-                        stats.unchanged += 1;
-                    }
-                    continue;
                 }
+                let marks_differ = !same_marks(stored, node);
+                if take_marks && (marks_differ || stored.freshness_at != node.freshness_at) {
+                    set_marks(conn, &node.id, node)?;
+                }
+                if take_marks && marks_differ {
+                    stats.freshness += 1;
+                }
+                if new_refs > 0 || (take_marks && marks_differ) {
+                    stats.updated += 1;
+                } else {
+                    stats.unchanged += 1;
+                }
+                continue;
+            }
+            match &stored {
                 Some(_) => stats.updated += 1,
                 None => stats.added += 1,
             }
@@ -595,6 +610,17 @@ pub fn import(
                     node.priority
                 ],
             )?;
+            match stored.as_ref().filter(|_| !take_marks) {
+                // Newer content from the file, and later marks from here:
+                // the marks here were made after that content was written.
+                Some(stored) => {
+                    set_marks(conn, &node.id, stored)?;
+                    if !same_marks(stored, node) {
+                        stats.freshness += 1;
+                    }
+                }
+                None => set_marks(conn, &node.id, node)?,
+            }
             store::set_tags(conn, &node.id, &node.tags)?;
             store::set_refs(conn, &node.id, &node.refs)?;
             store::reindex(conn, an, &node.id)?;
@@ -633,6 +659,81 @@ pub fn import(
         rec.finish(meta)?;
         Ok(stats)
     })
+}
+
+/// True when two copies of a node have the same stale mark and the same
+/// verification.
+fn same_marks(a: &Node, b: &Node) -> bool {
+    a.verified_at == b.verified_at
+        && a.verified_by == b.verified_by
+        && a.verified_note == b.verified_note
+        && a.stale_at == b.stale_at
+        && a.stale_note == b.stale_note
+}
+
+/// Which copy's marks stay when a node is here and in the file: true for
+/// the file's. The stale mark and the verification move as one unit.
+///
+/// 1. Marks say something about one text. A copy's marks count only when
+///    that copy's content is the one that stays, or when the marks were
+///    changed after the staying content was last edited. A verification
+///    of an older text says nothing about a newer one.
+/// 2. When both count, the copy whose marks changed last wins. A copy
+///    with no time (no mark was ever set, or the file is from a son that
+///    did not record a clear) is the earliest.
+/// 3. At the same time with different marks, a stale mark wins: a wrong
+///    "stale" costs a check, a wrong "verified" costs trust.
+///
+/// The times come from the clocks of two machines. A wrong clock can make
+/// the wrong copy win, as it can for content.
+fn marks_from_file(stored: &Node, file: &Node) -> bool {
+    let file_content = stored.updated_at < file.updated_at;
+    let content_time = if file_content {
+        file.updated_at.as_str()
+    } else {
+        stored.updated_at.as_str()
+    };
+    let counts = |node: &Node, owns_content: bool| {
+        owns_content || node.freshness_time().is_some_and(|at| at > content_time)
+    };
+    // The same content on both sides: both copies' marks are about it.
+    let same_content = stored.updated_at == file.updated_at;
+    let file_counts = counts(file, file_content || same_content);
+    let stored_counts = counts(stored, !file_content);
+    match (file_counts, stored_counts) {
+        (true, false) => true,
+        (false, _) => false,
+        (true, true) => match file.freshness_time().cmp(&stored.freshness_time()) {
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => {
+                if same_marks(stored, file) {
+                    file_content
+                } else {
+                    file.stale_at.is_some() && stored.stale_at.is_none()
+                }
+            }
+        },
+    }
+}
+
+/// Give the stored node `id` the stale mark and the verification of
+/// `from`, with the time they last changed.
+fn set_marks(conn: &Connection, id: &str, from: &Node) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET verified_at = ?2, verified_by = ?3, verified_note = ?4, \
+                          stale_at = ?5, stale_note = ?6, freshness_at = ?7 WHERE id = ?1",
+        params![
+            id,
+            from.verified_at,
+            from.verified_by,
+            from.verified_note,
+            from.stale_at,
+            from.stale_note,
+            from.freshness_time()
+        ],
+    )?;
+    Ok(())
 }
 
 fn stored_updated_at(conn: &Connection, id: &str) -> Result<Option<String>> {

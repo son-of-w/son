@@ -55,9 +55,9 @@ pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p
     n.evidence, n.verified_at, n.verified_by, n.verified_note, \
     (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
        FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value)), \
-    n.merged_into, n.stale_at, n.stale_note, n.priority";
+    n.merged_into, n.stale_at, n.stale_note, n.priority, n.freshness_at";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 25;
+pub const NCOLS: usize = 26;
 
 /// How a piece of knowledge was learned. This says where it came from, not
 /// that it is true. A node with none of these has unknown provenance.
@@ -179,6 +179,21 @@ pub struct Node {
     /// given.
     #[serde(default)]
     pub priority: Option<String>,
+    /// When the stale mark or the verification last changed: set or
+    /// cleared. `None` when neither ever was. An import uses it to know
+    /// which copy of a node has the later marks.
+    #[serde(default)]
+    pub freshness_at: Option<String>,
+}
+
+impl Node {
+    /// [`Node::freshness_at`], or for a node from a file that has no such
+    /// field, the later of its two mark times.
+    pub fn freshness_time(&self) -> Option<&str> {
+        self.freshness_at
+            .as_deref()
+            .or_else(|| self.verified_at.as_deref().max(self.stale_at.as_deref()))
+    }
 }
 
 impl Node {
@@ -242,6 +257,7 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
         stale_at: row.get(22)?,
         stale_note: row.get(23)?,
         priority: row.get(24)?,
+        freshness_at: row.get(25)?,
     })
 }
 
@@ -360,7 +376,10 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
              evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
              deleted_at = ?11, merged_into = ?12, stale_at = ?13, stale_note = ?14, \
-             priority = ?15, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             priority = ?15, \
+             freshness_at = CASE WHEN verified_at IS NOT ?8 OR stale_at IS NOT ?13 \
+                                 THEN {NOW} ELSE freshness_at END, \
+             updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -527,7 +546,7 @@ pub fn set_refs(conn: &Connection, id: &str, refs: &[Ref]) -> Result<()> {
 /// `updated_at` do not change.
 pub fn mark_stale(conn: &Connection, id: &str, note: &str) -> Result<()> {
     conn.execute(
-        &format!("UPDATE nodes SET stale_at = {NOW}, stale_note = ?2, rev = rev + 1 WHERE id = ?1"),
+        &format!("UPDATE nodes SET stale_at = {NOW}, stale_note = ?2, freshness_at = {NOW}, rev = rev + 1 WHERE id = ?1"),
         params![id, note],
     )?;
     Ok(())
@@ -535,7 +554,10 @@ pub fn mark_stale(conn: &Connection, id: &str, note: &str) -> Result<()> {
 
 pub fn clear_stale(conn: &Connection, id: &str) -> Result<()> {
     conn.execute(
-        "UPDATE nodes SET stale_at = NULL, stale_note = NULL, rev = rev + 1 WHERE id = ?1",
+        &format!(
+            "UPDATE nodes SET stale_at = NULL, stale_note = NULL, freshness_at = {NOW}, \
+             rev = rev + 1 WHERE id = ?1"
+        ),
         [id],
     )?;
     Ok(())
@@ -548,7 +570,7 @@ pub fn verify(conn: &Connection, id: &str, by: Option<&str>, note: &str) -> Resu
     conn.execute(
         &format!(
             "UPDATE nodes SET verified_at = {NOW}, verified_by = ?2, verified_note = ?3, \
-             stale_at = NULL, stale_note = NULL, rev = rev + 1 WHERE id = ?1"
+             stale_at = NULL, stale_note = NULL, freshness_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![id, by, note],
     )?;
@@ -558,8 +580,10 @@ pub fn verify(conn: &Connection, id: &str, by: Option<&str>, note: &str) -> Resu
 /// Take the verification away.
 pub fn unverify(conn: &Connection, id: &str) -> Result<()> {
     conn.execute(
-        "UPDATE nodes SET verified_at = NULL, verified_by = NULL, verified_note = NULL, \
-         rev = rev + 1 WHERE id = ?1",
+        &format!(
+            "UPDATE nodes SET verified_at = NULL, verified_by = NULL, verified_note = NULL, \
+             freshness_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+        ),
         [id],
     )?;
     Ok(())

@@ -2126,11 +2126,11 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
         found.sort();
         found
     };
-    // Bring a database back to schema 8: take away what schemas 9 and 10 added.
+    // Bring a database back to schema 8: take away what schemas 9 to 11 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
+            "ALTER TABLE nodes DROP COLUMN freshness_at; ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
              ALTER TABLE nodes DROP COLUMN stale_note; PRAGMA user_version = 8;",
         )
         .unwrap();
@@ -2138,7 +2138,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
 
     // A new database: created, and no copy.
     let first = sb.ok("alpha", &["init", "--db-only"]).stdout;
-    assert!(first.contains("database: created (schema 10)"), "{first}");
+    assert!(first.contains("database: created (schema 11)"), "{first}");
     let again = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
     assert_eq!(again["database_state"]["state"], "current");
     assert!(copies().is_empty());
@@ -2153,7 +2153,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let state = &report["database_state"];
     assert_eq!(state["state"], "upgraded");
     assert_eq!(state["from"], 8);
-    assert_eq!(state["schema"], 10);
+    assert_eq!(state["schema"], 11);
     let found = copies();
     assert_eq!(found.len(), 1);
     assert_eq!(state["copy"], found[0].display().to_string());
@@ -2168,7 +2168,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let out = sb.ok("alpha", &["--json", "list"]);
     assert!(
         out.stderr
-            .contains("son: database: upgraded from schema 8 to 10"),
+            .contains("son: database: upgraded from schema 8 to 11"),
         "{}",
         out.stderr
     );
@@ -2228,6 +2228,151 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
+}
+
+#[test]
+fn an_import_carries_stale_marks_and_verification_both_ways() {
+    let a = Sandbox::new("fresh-a");
+    let b = Sandbox::new("fresh-b");
+    let file = a.root.join("sync.json");
+    // Export from one, import into the other; gives the import's summary.
+    let sync = |from: &Sandbox, to: &Sandbox| -> Value {
+        std::fs::write(&file, from.ok("alpha", &["--json", "export"]).stdout).unwrap();
+        to.ok("alpha", &["--json", "import", file.to_str().unwrap()])
+            .json()
+    };
+    let node = |sb: &Sandbox, id: &str| sb.ok("alpha", &["--json", "show", id]).json();
+    let id = a
+        .ok("alpha", &["remember", "fact", "The API port is 8443"])
+        .id();
+    assert_eq!(sync(&a, &b)["added"], 2);
+
+    // A stale mark, set at the source after the copy was made.
+    a.ok("alpha", &["stale", &id, "--reason", "the port moved"]);
+    let stats = sync(&a, &b);
+    assert_eq!(stats["freshness"], 1, "{stats}");
+    assert_eq!(node(&b, &id)["stale_note"], "the port moved");
+    // The same file again changes nothing.
+    let stats = sync(&a, &b);
+    assert_eq!(
+        (stats["freshness"].clone(), stats["updated"].clone()),
+        (0.into(), 0.into())
+    );
+
+    // The mark is cleared at the source: the clear comes across.
+    a.ok("alpha", &["stale", &id, "--clear"]);
+    assert_eq!(sync(&a, &b)["freshness"], 1);
+    assert!(node(&b, &id)["stale_at"].is_null());
+
+    // A verification, and its removal.
+    a.ok("alpha", &["verify", &id, "--checked", "read the config"]);
+    sync(&a, &b);
+    assert_eq!(node(&b, &id)["verified_note"], "read the config");
+    a.ok("alpha", &["verify", &id, "--clear"]);
+    assert_eq!(sync(&a, &b)["freshness"], 1);
+    assert!(node(&b, &id)["verified_at"].is_null());
+
+    // A verification at one side clears a stale mark made earlier at the
+    // other: the marks move as one unit, and the later change wins.
+    b.ok("alpha", &["stale", &id, "--reason", "looks old"]);
+    sync(&b, &a);
+    assert!(!node(&a, &id)["stale_at"].is_null());
+    a.ok("alpha", &["verify", &id, "--checked", "checked again"]);
+    sync(&a, &b);
+    let now = node(&b, &id);
+    assert!(now["stale_at"].is_null() && !now["verified_at"].is_null());
+
+    // Later marks here are kept against an older file.
+    let old_file = a.ok("alpha", &["--json", "export"]).stdout;
+    b.ok("alpha", &["stale", &id, "--reason", "newer here"]);
+    std::fs::write(&file, &old_file).unwrap();
+    let stats = b
+        .ok("alpha", &["--json", "import", file.to_str().unwrap()])
+        .json();
+    assert_eq!(stats["freshness"], 0);
+    assert_eq!(node(&b, &id)["stale_note"], "newer here");
+
+    // Marks made before the content here was last edited say nothing
+    // about the new text: they are not taken.
+    b.ok("alpha", &["stale", &id, "--clear"]);
+    sync(&b, &a);
+    a.ok("alpha", &["verify", &id, "--checked", "of the old text"]);
+    let with_old_check = a.ok("alpha", &["--json", "export"]).stdout;
+    b.ok(
+        "alpha",
+        &["edit", &id, "--body", "Changed after that check"],
+    );
+    std::fs::write(&file, &with_old_check).unwrap();
+    b.ok("alpha", &["import", file.to_str().unwrap()]);
+    let now = node(&b, &id);
+    assert_eq!(now["body"], "Changed after that check");
+    assert_ne!(now["verified_note"], "of the old text");
+
+    // Newer content from the file, with a mark here that is later still:
+    // the content comes in and the mark stays.
+    sync(&b, &a);
+    a.ok("alpha", &["edit", &id, "--body", "Edited at the source"]);
+    let newer_content = a.ok("alpha", &["--json", "export"]).stdout;
+    b.ok(
+        "alpha",
+        &["stale", &id, "--reason", "marked after that edit"],
+    );
+    std::fs::write(&file, &newer_content).unwrap();
+    b.ok("alpha", &["import", file.to_str().unwrap()]);
+    let now = node(&b, &id);
+    assert_eq!(now["body"], "Edited at the source");
+    assert_eq!(now["stale_note"], "marked after that edit");
+
+    // The import is one change: undo puts the marks back.
+    sync(&b, &a);
+    a.ok("alpha", &["verify", &id, "--checked", "to be undone"]);
+    sync(&a, &b);
+    assert_eq!(node(&b, &id)["verified_note"], "to be undone");
+    b.ok("alpha", &["undo", &id]);
+    assert_eq!(node(&b, &id)["stale_note"], "marked after that edit");
+
+    // A file from a son that did not record the time: a later mark is
+    // taken, a clear is not (the file cannot show one).
+    let strip = |text: &str| -> String {
+        let mut dump: Value = serde_json::from_str(text).unwrap();
+        for n in dump["nodes"].as_array_mut().unwrap() {
+            n.as_object_mut().unwrap().remove("freshness_at");
+        }
+        dump.to_string()
+    };
+    sync(&b, &a);
+    a.ok("alpha", &["verify", &id, "--checked", "from an old son"]);
+    std::fs::write(&file, strip(&a.ok("alpha", &["--json", "export"]).stdout)).unwrap();
+    b.ok("alpha", &["import", file.to_str().unwrap()]);
+    assert_eq!(node(&b, &id)["verified_note"], "from an old son");
+    a.ok("alpha", &["verify", &id, "--clear"]);
+    std::fs::write(&file, strip(&a.ok("alpha", &["--json", "export"]).stdout)).unwrap();
+    let stats = b
+        .ok("alpha", &["--json", "import", file.to_str().unwrap()])
+        .json();
+    assert_eq!(stats["freshness"], 0);
+    assert_eq!(node(&b, &id)["verified_note"], "from an old son");
+
+    // The same time on both sides with different marks: stale wins.
+    sync(&b, &a);
+    let mut dump: Value =
+        serde_json::from_str(&a.ok("alpha", &["--json", "export"]).stdout).unwrap();
+    let at = node(&b, &id)["freshness_at"].clone();
+    for n in dump["nodes"].as_array_mut().unwrap() {
+        if n["type"] == "fact" {
+            n["verified_at"] = Value::Null;
+            n["verified_by"] = Value::Null;
+            n["verified_note"] = Value::Null;
+            n["stale_at"] = at.clone();
+            n["stale_note"] = "same moment".into();
+            n["freshness_at"] = at.clone();
+        }
+    }
+    std::fs::write(&file, dump.to_string()).unwrap();
+    b.ok("alpha", &["import", file.to_str().unwrap()]);
+    let now = node(&b, &id);
+    assert_eq!(now["stale_note"], "same moment");
+    assert!(now["verified_at"].is_null());
 }
 
 /// A text of the form of a Stripe live key. Joined at run time, so that
@@ -3759,12 +3904,12 @@ fn doctor_reports_and_changes_nothing() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
-    raw().execute_batch("PRAGMA user_version = 10").unwrap();
+    raw().execute_batch("PRAGMA user_version = 11").unwrap();
     raw().execute_batch("PRAGMA user_version = 999").unwrap();
     let (ok, report) = status(&sb);
     assert!(!ok);
     assert_eq!(of(&report, "schema"), "problem");
-    raw().execute_batch("PRAGMA user_version = 10").unwrap();
+    raw().execute_batch("PRAGMA user_version = 11").unwrap();
 
     // A row that points at nothing.
     raw()
