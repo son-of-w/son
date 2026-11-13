@@ -3164,6 +3164,186 @@ fn init_adds_the_block_once_and_keeps_other_text() {
     assert!(!claude_md.exists());
 }
 
+/// Every file under `dir`, as sorted paths relative to it.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, base, found);
+            } else {
+                found.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .display()
+                        .to_string()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, dir, &mut found);
+    found.sort();
+    found
+}
+
+#[test]
+fn init_refuses_a_file_with_marks_that_do_not_make_one_block() {
+    let sb = Sandbox::new("init-marks");
+    let home = sb.root.join("home");
+    let claude_md = home.join(".claude/CLAUDE.md");
+    let agents_md = home.join(".codex/AGENTS.md");
+    std::fs::create_dir_all(claude_md.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(agents_md.parent().unwrap()).unwrap();
+    let start = "<!-- son:start -->";
+    let end = "<!-- son:end -->";
+    let both = ["init", "--agent", "claude-code,codex", "--scope", "global"];
+
+    let cases = [
+        (
+            format!("# Mine\n\n{start}\nold block\n\n## My notes\nKeep this.\n"),
+            "a start mark (line 3) and no end mark",
+        ),
+        (
+            format!("# Mine\n{end}\n\n## My notes\nKeep this.\n"),
+            "an end mark (line 2) and no start mark",
+        ),
+        (
+            format!("{end}\n## My notes\nKeep this.\n{start}\n"),
+            "the end mark (line 1) is before the start mark (line 4)",
+        ),
+        (
+            format!("{start}\na\n{end}\n## My notes\nKeep this.\n{start}\nb\n{end}\n"),
+            "more than one block",
+        ),
+    ];
+    for (bad, fault) in cases {
+        std::fs::write(&agents_md, &bad).unwrap();
+        std::fs::write(&claude_md, "# Fine\n").unwrap();
+        let before = files_under(&home);
+
+        // Twice: the fault that started this was text lost on the second run.
+        for _ in 0..2 {
+            let out = sb.son("alpha", &both);
+            assert!(!out.ok, "{fault}: init must fail");
+            assert!(out.stderr.contains(fault), "{}", out.stderr);
+            assert!(out.stderr.contains("AGENTS.md"), "{}", out.stderr);
+            assert!(out.stderr.contains("no file was changed"), "{}", out.stderr);
+            // The bad file is as it was, and so is the good one: no skill,
+            // no block, no file left behind.
+            assert_eq!(std::fs::read_to_string(&agents_md).unwrap(), bad);
+            assert_eq!(std::fs::read_to_string(&claude_md).unwrap(), "# Fine\n");
+            assert_eq!(files_under(&home), before);
+        }
+
+        let output = sb.command("alpha", &["--json", "init", "-a", "codex", "-g"]);
+        let output = { output }.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "broken_block");
+
+        // Doctor names the same fault and changes nothing.
+        let report = sb.son("alpha", &["--json", "doctor"]);
+        assert!(!report.ok);
+        let report: Value = serde_json::from_str(&report.stdout).unwrap();
+        let check = report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "instruction file" && c["status"] == "problem")
+            .expect("doctor reports the file");
+        assert!(check["detail"].as_str().unwrap().contains(fault));
+        assert!(check["fix"].as_str().unwrap().contains("or delete both"));
+        assert_eq!(std::fs::read_to_string(&agents_md).unwrap(), bad);
+    }
+
+    // --skill-only does not touch instruction files, so it is not stopped.
+    sb.ok("alpha", &["init", "-a", "codex", "-g", "--skill-only"]);
+
+    // After a repair by hand, init works and keeps the user's text.
+    std::fs::write(&agents_md, "## My notes\nKeep this.\n").unwrap();
+    sb.ok("alpha", &both);
+    let text = std::fs::read_to_string(&agents_md).unwrap();
+    assert!(text.starts_with("## My notes\nKeep this.\n"));
+    assert_eq!(text.matches(start).count(), 1);
+    assert_eq!(text.matches(end).count(), 1);
+    let once = text.clone();
+    sb.ok("alpha", &both);
+    assert_eq!(std::fs::read_to_string(&agents_md).unwrap(), once);
+    assert!(
+        files_under(&home).iter().all(|f| !f.ends_with(".tmp")),
+        "no temporary file stays behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_replaces_files_whole_and_keeps_their_mode_and_links() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new("init-atomic");
+    let home = sb.root.join("home");
+    let dir = home.join(".claude");
+    let claude_md = dir.join("CLAUDE.md");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // The access mode of an existing file is kept.
+    std::fs::write(&claude_md, "# Mine\n").unwrap();
+    std::fs::set_permissions(&claude_md, std::fs::Permissions::from_mode(0o600)).unwrap();
+    sb.ok("alpha", &INIT_CLAUDE);
+    let mode = std::fs::metadata(&claude_md).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert!(std::fs::read_to_string(&claude_md)
+        .unwrap()
+        .starts_with("# Mine\n"));
+
+    // A symbolic link stays a link; the file behind it gets the block.
+    let real = sb.root.join("dotfiles/CLAUDE.md");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::write(&real, "# Linked\n").unwrap();
+    std::fs::remove_file(&claude_md).unwrap();
+    std::os::unix::fs::symlink(&real, &claude_md).unwrap();
+    sb.ok("alpha", &INIT_CLAUDE);
+    assert!(std::fs::symlink_metadata(&claude_md)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let linked = std::fs::read_to_string(&real).unwrap();
+    assert!(linked.starts_with("# Linked\n") && linked.contains("<!-- son:end -->"));
+    std::fs::remove_file(&claude_md).unwrap();
+
+    // A write that fails leaves the old file as it was. The folder is made
+    // read-only, so the new file cannot be made. (Root can write anyway;
+    // then there is nothing to test.)
+    let old = "# Mine\n\nBe brief.\n";
+    std::fs::write(&claude_md, old).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let root_can_write = std::fs::write(dir.join("probe"), "").is_ok();
+    if !root_can_write {
+        let mut rules_only = INIT_CLAUDE.to_vec();
+        rules_only.extend(["--json"]);
+        let output = sb.command("alpha", &rules_only).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "install_failed");
+        assert_eq!(std::fs::read_to_string(&claude_md).unwrap(), old);
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_file(dir.join("probe"));
+    assert_eq!(
+        files_under(&dir)
+            .iter()
+            .filter(|f| f.ends_with(".tmp"))
+            .count(),
+        0
+    );
+}
+
 #[test]
 fn init_sets_up_several_agents_globally() {
     let sb = Sandbox::new("init-global");

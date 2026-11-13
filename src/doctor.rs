@@ -275,16 +275,20 @@ fn file_checks(checks: &mut Vec<Check>) {
         } else {
             text.contains(&instructions::block())
         };
-        let whole = is_skill || text.contains(instructions::END);
-        checks.push(if current {
-            check(name, Status::Healthy, shown, None)
-        } else if !whole {
+        let fault = if is_skill {
+            None
+        } else {
+            instructions::find_block(&text).err()
+        };
+        checks.push(if let Some(fault) = fault {
             check(
                 name,
                 Status::Problem,
-                format!("{shown}: the son block has a start mark and no end mark"),
-                Some("remove the broken block by hand, then run `son init`"),
+                format!("{shown} has {fault}. `son init` refuses to change this file"),
+                Some(instructions::REPAIR),
             )
+        } else if current {
+            check(name, Status::Healthy, shown, None)
         } else {
             check(
                 name,

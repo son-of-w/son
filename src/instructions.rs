@@ -7,7 +7,7 @@
 //! so that the agent uses `son` without being asked.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const START: &str = "<!-- son:start -->";
 pub const END: &str = "<!-- son:end -->";
@@ -123,7 +123,7 @@ pub fn skill() -> &'static str {
 
 /// True when `text` is a `son` skill file or holds the `son` block.
 pub fn is_installed_in(text: &str) -> bool {
-    text.contains(START) || text.contains(SKILL_MARK)
+    text.contains(START) || text.contains(END) || text.contains(SKILL_MARK)
 }
 
 /// Write the skill file at `path`. The whole file belongs to `son`, so an
@@ -135,11 +135,7 @@ pub fn install_skill(path: &Path) -> Result<Outcome> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Outcome::Created,
         Err(err) => return Err(err).with_context(|| format!("cannot read {}", path.display())),
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
-    }
-    std::fs::write(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
+    replace_file(path, SKILL)?;
     Ok(outcome)
 }
 
@@ -162,8 +158,77 @@ impl Outcome {
     }
 }
 
+/// How to repair a file that [`find_block`] refuses. `son` does not repair
+/// it: it cannot know where the user's own text starts.
+pub const REPAIR: &str = "keep one `<!-- son:start -->` line with one `<!-- son:end -->` line after it, or delete both, then run `son init`";
+
+/// The line numbers (from 1) of each place `mark` is in `text`.
+fn mark_lines(text: &str, mark: &str) -> Vec<usize> {
+    text.match_indices(mark)
+        .map(|(at, _)| text[..at].matches('\n').count() + 1)
+        .collect()
+}
+
+fn lines_text(lines: &[usize]) -> String {
+    let list: Vec<String> = lines.iter().map(usize::to_string).collect();
+    format!(
+        "line{} {}",
+        if lines.len() == 1 { "" } else { "s" },
+        list.join(", ")
+    )
+}
+
+/// Where the `son` block is in `text`, as a byte range that includes both
+/// marks. `Ok(None)` when the text has no mark at all. `Err` says what is
+/// wrong when the marks do not make exactly one block: such a file is
+/// never written to, because a guess could remove the user's own text.
+pub fn find_block(text: &str) -> std::result::Result<Option<std::ops::Range<usize>>, String> {
+    let starts: Vec<usize> = text.match_indices(START).map(|(at, _)| at).collect();
+    let ends: Vec<usize> = text.match_indices(END).map(|(at, _)| at).collect();
+    let start_lines = mark_lines(text, START);
+    let end_lines = mark_lines(text, END);
+    match (starts.as_slice(), ends.as_slice()) {
+        ([], []) => Ok(None),
+        ([start], [end]) if start < end => Ok(Some(*start..*end + END.len())),
+        ([_], [_]) => Err(format!(
+            "the end mark ({}) is before the start mark ({})",
+            lines_text(&end_lines),
+            lines_text(&start_lines)
+        )),
+        ([_], []) => Err(format!(
+            "a start mark ({}) and no end mark",
+            lines_text(&start_lines)
+        )),
+        ([], _) => Err(format!(
+            "an end mark ({}) and no start mark",
+            lines_text(&end_lines)
+        )),
+        _ => Err(format!(
+            "more than one block: start marks on {}, end marks on {}",
+            lines_text(&start_lines),
+            if end_lines.is_empty() {
+                "no line".to_string()
+            } else {
+                lines_text(&end_lines)
+            }
+        )),
+    }
+}
+
+/// Look at the instruction file at `path` and change nothing. `Err` holds
+/// what is wrong with its marks. A file that is not there is fine.
+pub fn check_file(path: &Path) -> std::result::Result<(), String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => find_block(&text).map(|_| ()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("cannot be read: {err}")),
+    }
+}
+
 /// Put the block into the file at `path`. A second run replaces the block in
-/// place, so it is never added twice. Text outside the markers is kept.
+/// place, so it is never added twice. Text outside the markers is kept. A
+/// file whose marks do not make exactly one block is refused and not
+/// changed.
 pub fn install(path: &Path) -> Result<Outcome> {
     let block = block();
     let existing = match std::fs::read_to_string(path) {
@@ -174,34 +239,93 @@ pub fn install(path: &Path) -> Result<Outcome> {
 
     let (text, outcome) = match existing {
         None => (block, Outcome::Created),
-        Some(old) => match merge(&old, &block) {
-            Some(new) if new == old => return Ok(Outcome::Unchanged),
-            Some(new) => (new, Outcome::Updated),
-            None => {
-                let mut new = old.trim_end().to_string();
-                if !new.is_empty() {
-                    new.push_str("\n\n");
+        Some(old) => {
+            let merged = merge(&old, &block).map_err(|fault| {
+                crate::error::coded(
+                    "broken_block",
+                    format!("{} has {fault}; to repair it, {REPAIR}", path.display()),
+                )
+            })?;
+            match merged {
+                Some(new) if new == old => return Ok(Outcome::Unchanged),
+                Some(new) => (new, Outcome::Updated),
+                None => {
+                    let mut new = old.trim_end().to_string();
+                    if !new.is_empty() {
+                        new.push_str("\n\n");
+                    }
+                    new.push_str(&block);
+                    (new, Outcome::Added)
                 }
-                new.push_str(&block);
-                (new, Outcome::Added)
             }
-        },
+        }
     };
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
-    }
-    std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    replace_file(path, &text)?;
     Ok(outcome)
 }
 
-/// Replace an existing block in `old`. `None` when `old` has no block.
-fn merge(old: &str, block: &str) -> Option<String> {
-    let start = old.find(START)?;
-    let end = start + old[start..].find(END)? + END.len();
-    let after = old[end..].strip_prefix('\n').unwrap_or(&old[end..]);
-    Some(format!("{}{}{}", &old[..start], block, after))
+/// Replace an existing block in `old`. `Ok(None)` when `old` has no block.
+fn merge(old: &str, block: &str) -> std::result::Result<Option<String>, String> {
+    let Some(range) = find_block(old)? else {
+        return Ok(None);
+    };
+    let rest = &old[range.end..];
+    let after = rest.strip_prefix('\n').unwrap_or(rest);
+    Ok(Some(format!("{}{}{}", &old[..range.start], block, after)))
+}
+
+/// Where a write to `path` lands: the file a symbolic link points at, else
+/// `path` itself. A link stays a link, and the file behind it is replaced.
+fn write_target(path: &Path) -> PathBuf {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    if !is_link {
+        return path.to_path_buf();
+    }
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    // A link to a file that is not there yet: create that file.
+    match std::fs::read_link(path) {
+        Ok(to) if to.is_absolute() => to,
+        Ok(to) => path.parent().map(|dir| dir.join(&to)).unwrap_or(to),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// Write `text` to `path` so that the file is always whole: the text goes
+/// to a new file in the same folder, which then takes the place of the old
+/// one in one step. If any part fails, the old file is as it was. The new
+/// file keeps the access mode of the old one.
+pub fn replace_file(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+
+    let target = write_target(path);
+    let dir = match target.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = dir.join(format!(".{name}.son-{}.tmp", std::process::id()));
+
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if let Ok(meta) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&temp, meta.permissions())?;
+        }
+        std::fs::rename(&temp, &target)
+    };
+    write().map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        anyhow::Error::new(err).context(format!("cannot write {}", path.display()))
+    })
 }
 
 #[cfg(test)]
@@ -211,7 +335,7 @@ mod tests {
     #[test]
     fn merge_replaces_only_the_block() {
         let old = format!("# Mine\n\n{START}\nold text\n{END}\n\n## After\n");
-        let new = merge(&old, &block()).unwrap();
+        let new = merge(&old, &block()).unwrap().unwrap();
         assert!(new.starts_with("# Mine\n\n"));
         assert!(new.ends_with("\n## After\n"));
         assert!(!new.contains("old text"));
@@ -221,7 +345,7 @@ mod tests {
     #[test]
     fn merge_is_stable() {
         let once = format!("# Mine\n\n{}", block());
-        assert_eq!(merge(&once, &block()).unwrap(), once);
+        assert_eq!(merge(&once, &block()).unwrap().unwrap(), once);
     }
 
     #[test]
@@ -232,6 +356,52 @@ mod tests {
 
     #[test]
     fn no_block_means_no_merge() {
-        assert!(merge("# Mine\n", &block()).is_none());
+        assert_eq!(merge("# Mine\n", &block()), Ok(None));
+    }
+
+    #[test]
+    fn marks_that_do_not_make_one_block_are_refused() {
+        let cases = [
+            (
+                format!("a\n{START}\nmine\n"),
+                "a start mark (line 2) and no end mark",
+            ),
+            (
+                format!("a\n\n{END}\nmine\n"),
+                "an end mark (line 3) and no start mark",
+            ),
+            (
+                format!("{END}\nmine\n{START}\n"),
+                "the end mark (line 1) is before the start mark (line 3)",
+            ),
+            (
+                format!("{START}\nx\n{END}\nmine\n{START}\ny\n{END}\n"),
+                "more than one block: start marks on lines 1, 5, end marks on lines 3, 7",
+            ),
+            (
+                format!("{START}\nx\n{START}\nmine\n{END}\n"),
+                "more than one block: start marks on lines 1, 3, end marks on line 5",
+            ),
+            (
+                format!("{START}\nx\n{END}\nmine\n{END}\n"),
+                "more than one block: start marks on line 1, end marks on lines 3, 5",
+            ),
+            (
+                format!("{START}\nx\n{START}\nmine\n"),
+                "more than one block: start marks on lines 1, 3, end marks on no line",
+            ),
+        ];
+        for (text, fault) in cases {
+            assert_eq!(find_block(&text), Err(fault.to_string()), "{text}");
+            assert_eq!(merge(&text, &block()), Err(fault.to_string()));
+        }
+    }
+
+    #[test]
+    fn one_block_is_found_with_both_marks() {
+        let text = format!("# Mine\n{START}\nx\n{END}\nafter\n");
+        let range = find_block(&text).unwrap().unwrap();
+        assert!(text[range.clone()].starts_with(START));
+        assert!(text[range].ends_with(END));
     }
 }

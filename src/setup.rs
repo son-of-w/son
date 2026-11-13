@@ -248,6 +248,33 @@ pub fn run(database: &Path, opts: &Options) -> Result<()> {
     let chosen = choose_agents(opts)?;
     let scope = choose_scope(opts, &root)?;
 
+    // Look at every instruction file before any file is written. One file
+    // with marks that do not make one block stops the whole run.
+    if !opts.skill_only {
+        let faults: Vec<String> = chosen
+            .iter()
+            .filter_map(|agent| agent.rules_file(scope, &root))
+            .filter_map(|path| {
+                instructions::check_file(&path)
+                    .err()
+                    .map(|fault| format!("  {}: {fault}", short(&path)))
+            })
+            .collect();
+        if !faults.is_empty() {
+            return Err(crate::error::coded(
+                "broken_block",
+                format!(
+                    "no file was changed: {} instruction file(s) hold a son block that is not whole
+{}
+                     son does not repair these, because it cannot tell which text is yours.                      In each file, {}. `son doctor` shows the same check.",
+                    faults.len(),
+                    faults.join("\n"),
+                    instructions::REPAIR
+                ),
+            ));
+        }
+    }
+
     let done: Vec<Installed> = chosen
         .into_iter()
         .map(|agent| install(agent, scope, &root, opts.skill_only))

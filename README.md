@@ -173,6 +173,8 @@ For each agent it writes two things:
 
 Running it again updates these files in place and never adds them twice.
 
+The block is the text between the lines `<!-- son:start -->` and `<!-- son:end -->`. `son init` writes to an instruction file only when it has exactly one such block or no mark at all. If a mark is missing, in the wrong order or there twice, `son init` checks every file first, changes none, and names the file and the lines; `son doctor` reports the same. It does not repair the file, because it cannot tell which text is yours: keep one start line with one end line after it, or delete both, and run `son init` again. Each file is replaced in one step, so a write that fails leaves the old file whole. A file that is a symbolic link stays a link, and the file behind it is changed.
+
 To skip the questions (an agent or a script has to):
 
 ```bash
@@ -324,6 +326,7 @@ With `--json`, a command that succeeds writes its result to stdout. A command th
 | `idempotency_conflict` | The `--key` was already used for a different write. Nothing was saved |
 | `import_failed` | The file is not a `son` export, or is of a version this `son` does not read |
 | `install_failed` | `son init` could not write all files. Its report on stdout is still complete |
+| `broken_block` | An instruction file holds `son` marks that do not make exactly one block. `son init` changed nothing. Repair the file by hand |
 | `io_error` | A file could not be read or written |
 | `not_empty` | A backup was not restored because the database holds data and `--replace` was not given |
 | `problems_found` | `son doctor` found a problem. Its report on stdout is still complete |
