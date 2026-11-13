@@ -8,7 +8,8 @@ description: >
 # The values come from repository secrets (set with `gh secret set`):
 #   MACOS_CERT_P12        the Developer ID Application certificate and its
 #                         key, exported as .p12, then base64
-#   MACOS_CERT_PASSWORD   the password of that .p12
+#   MACOS_CERT_PASSWORD   the password of that .p12; empty or not set when the
+#                         .p12 was exported with no password
 #   NOTARY_KEY_P8         the App Store Connect API key file (.p8)
 # The key id and issuer id (NOTARY_KEY_ID, NOTARY_ISSUER_ID) are given to
 # scripts/release.sh directly, as SON_NOTARY_KEY_ID and SON_NOTARY_ISSUER.
@@ -17,8 +18,9 @@ inputs:
     description: The certificate and its key as a base64 .p12
     required: true
   cert-password:
-    description: The password of the .p12
-    required: true
+    description: The password of the .p12, empty when it has none
+    required: false
+    default: ""
   notary-key-p8:
     description: The contents of the App Store Connect API key file
     required: true
@@ -32,7 +34,7 @@ runs:
         MACOS_CERT_PASSWORD: ${{ inputs.cert-password }}
         NOTARY_KEY_P8: ${{ inputs.notary-key-p8 }}
       run: |
-        if [ -z "$MACOS_CERT_P12" ] || [ -z "$MACOS_CERT_PASSWORD" ] || [ -z "$NOTARY_KEY_P8" ]; then
+        if [ -z "$MACOS_CERT_P12" ] || [ -z "$NOTARY_KEY_P8" ]; then
           echo "The signing secrets are not set; see .github/actions/mac-signing/action.yml." >&2
           exit 1
         fi
