@@ -52,6 +52,7 @@ pub fn same_content(a: &Node, b: &Node) -> bool {
         && a.stale_at == b.stale_at
         && a.stale_note == b.stale_note
         && a.priority == b.priority
+        && a.number == b.number
 }
 
 /// Collects what one operation changes, then writes it down. Use inside

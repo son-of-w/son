@@ -189,6 +189,14 @@ son init --yes
 
 `--yes` takes the detected agents and the global scope. `--scope project` installs into the current project (the git root). Other flags: `--list-agents`, `--skill-only`, `--db-only`, `--print-skill`, `--print-block`.
 
+### A backlog in son: the todo skill
+
+`son init --todo-skill` also installs a second skill, named `todo`. It gives an agent a backlog workflow: capture a todo with its full detail (outcome, context, decisions, dependencies, acceptance, open questions), find and update an existing one and not add a copy, give each a priority and a number, put a child under its parent, finish one with what shows that it is done, and print the whole open backlog. Everything is kept in `son`, so every session and every agent sees the same backlog, and no `TODO.md` is needed. A project uses one or the other, not both.
+
+- A plain `son init` does not install it. Once it is installed, each later `son init` brings it up to date, as it does for the other files.
+- If you have a skill named `todo` already, it is not touched: in a terminal `son init` asks what to do, and without a terminal it leaves your skill as it is and says so. Give `--todo-skill-name <name>` to install the `son` skill under another name, or `--overwrite-todo-skill` to replace yours.
+- `son doctor` reports the file, `son context` warns when it is from another version, and `son uninstall` removes it.
+
 ### Start with what you already wrote
 
 A new database is empty, and `son` shows its worth only when something is stored. You probably have text for your agents already: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, Cursor rules, Copilot instructions, and the memory files that Claude Code keeps for a project. Ask your agent to run:
@@ -259,6 +267,12 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 ### Todos
 
 - **A todo is a node with a status**: `open`, `done` or `dropped`. `son todo done <id>` finishes it, and `son todo reopen <id>` opens it again; both are in the history and can be undone. Everything else is the same as for other nodes: `son edit <id>` changes it and `son drop <id>` removes it.
+- **A todo has a number that a person can say**, such as `#4`, beside its id. Either one works where a command takes a todo: `son todo done 4`, `son show '#4'`, `son recall 4`. Numbers count for each collection, start at 1, and are never given twice, also after a todo is purged. Todos from before numbers have none, except that a todo whose title started with a number (`#23 Fix the import`) got it as its number at the upgrade.
+- **A todo can be a child of another.** `son todo add "<title>" --parent 4` makes `#4.1`, and links it to `#4` with `belongs_to`; a child of that is `#4.1.1`. `son todo list` shows the children under their parent. A todo with open children cannot be done: `son todo done` refuses it and lists them.
+- **`son todo backlog` prints the open todos as a backlog**: one line each with the priority, the number and the title, children under their parent, and the most urgent first inside each level.
+- **`son todo done <todo> --note "<text>"`** adds what shows that it is done to the body, with the date.
+- **A number counts in one collection.** A todo that moves to another collection (`son edit <todo> --collection <name>`) keeps its number when it is free there; a child, or a todo whose number is in use there, gets the next free number, and the command says so. The same holds for an import: the todo that arrives gets the next free number, its children arrive under the new number, and the import lists each change. A merge keeps the number of the node that stays.
+- **To bring in a backlog that has numbers already**, give them: `son todo add "<title>" --number 4.1 --status done --priority p1 --body -`. Add a parent before its children.
 - **A todo can have a priority**, `p0` (most urgent) to `p4`: `son todo add "<title>" --priority p1`, and `son edit <id> --priority p2` to change it or `--priority none` to take it away. A priority is not required. Only a todo can have one.
 - **The most urgent comes first.** `son todo list` and the open todos of `son context` are in priority order, a todo with no priority after `p4`, and the oldest first inside one priority. `son context` shows at most ten open todos, so these are the ten most urgent. `son review` does not look at priority: it lists a todo that is open for a long time, whatever its priority.
 
@@ -308,6 +322,7 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 
 ```
 son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
+         [--todo-skill] [--todo-skill-name <name>] [--overwrite-todo-skill]
 son uninstall [--agent a,b] [--scope global|project] [--yes] [--dry-run]   remove what init wrote
 son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b] [--link <id>:<relation>]
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
@@ -327,9 +342,11 @@ son drop <id> [--purge]
 son restore <id>
 son history <id> [--op <number>] [--limit 20] [--page 1]
 son undo <id> [--op <number>]
-son todo add "<title>" [--priority p0..p4] [--collection <name>] [--tag a,b]
+son todo add "<title>" [--priority p0..p4] [--parent <todo>] [--number <n>] [--status <status>]
+                       [--collection <name>] [--tag a,b]
 son todo list [--collection <name>] [--all] [--done] [--tag a,b]
-son todo done <id>
+son todo backlog [--collection <name>]     the open todos, one line each, children under their parent
+son todo done <todo> [--note <text>]       <todo> is a number (4.1) or an id
 son todo reopen <id>                       open a done or dropped todo again
 son link <from> <relation> <to>
 son unlink <from> <relation> <to>

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The schema version this son reads and writes.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -224,6 +224,64 @@ UPDATE nodes SET freshness_at = CASE
     WHEN stale_at IS NULL THEN verified_at
     ELSE max(verified_at, stale_at) END;
 ";
+
+/// Version 12: a todo has a number that a person can say, such as `4` or
+/// `4.1` (a child of `4`). Numbers count for each collection. A number is
+/// never given twice: `todo_numbers` keeps the highest one used under each
+/// parent, also after the todo is purged.
+const SCHEMA_V12: &str = "
+ALTER TABLE nodes ADD COLUMN number TEXT;
+CREATE UNIQUE INDEX nodes_number ON nodes(project_id, number) WHERE number IS NOT NULL;
+CREATE TABLE todo_numbers (
+    project_id  TEXT NOT NULL,
+    parent      TEXT NOT NULL DEFAULT '',
+    last        INTEGER NOT NULL,
+    PRIMARY KEY (project_id, parent)
+);
+";
+
+/// Older todos that carry a number at the start of the title (`#23 Fix
+/// the import`) get it as their number, and the title loses it, so that
+/// the number is not shown twice. A number that another todo of the same
+/// collection already has stays in the title.
+fn numbers_from_titles(conn: &Connection) -> Result<()> {
+    let an = crate::analyze::Analyzer::new();
+    let rows: Vec<(String, String, Option<String>)> = conn
+        .prepare("SELECT id, title, project_id FROM nodes WHERE type = 'todo' ORDER BY id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, title, project_id) in rows {
+        let Some(project_id) = project_id else {
+            continue;
+        };
+        let Some(rest) = title.trim_start().strip_prefix('#') else {
+            continue;
+        };
+        let (first, new_title) = match rest.split_once(char::is_whitespace) {
+            Some((first, new_title)) => (first, new_title.trim()),
+            None => continue,
+        };
+        let first = first.trim_end_matches([':', '.', ')']);
+        let Some(number) = crate::store::parse_number(first) else {
+            continue;
+        };
+        if new_title.is_empty()
+            || crate::store::find_by_number(conn, &project_id, &number)?.is_some()
+        {
+            continue;
+        }
+        conn.execute(
+            "UPDATE nodes SET number = ?2, title = ?3 WHERE id = ?1",
+            rusqlite::params![id, number, new_title],
+        )?;
+        conn.execute(
+            "UPDATE nodes_fts SET title = ?2 WHERE node_id = ?1",
+            rusqlite::params![id, an.index_text(new_title)],
+        )?;
+        crate::store::note_number(conn, &project_id, &number)?;
+    }
+    Ok(())
+}
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
 pub fn path() -> Result<PathBuf> {
@@ -640,6 +698,10 @@ fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
         if version < 11 {
             conn.execute_batch(SCHEMA_V11)?;
         }
+        if version < 12 {
+            conn.execute_batch(SCHEMA_V12)?;
+            numbers_from_titles(conn)?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     })();
@@ -744,6 +806,61 @@ mod tests {
         drop(conn);
         assert_eq!(open_with(&path, true).unwrap().1, Opened::Current);
         assert_eq!(copies(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_number_at_the_start_of_a_todo_title_becomes_its_number() {
+        let dir = temp_dir("titles");
+        let path = dir.join("son.db");
+        version_8(&path);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO nodes (id, type, title, status, project_id, created_at, updated_at) VALUES \
+                 ('01T1', 'todo', '#23 Complete the todo commands', 'open', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                 ('01T2', 'todo', '#23 The same number again', 'open', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                 ('01T3', 'todo', '#4.1: A child', 'done', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                 ('01T4', 'todo', 'No number here #5', 'open', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                 ('01T5', 'todo', '#hashtag is not a number', 'open', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                 ('01N1', 'note', '#7 A note keeps its title', NULL, '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+                 INSERT INTO nodes_fts (node_id, title, tags, body) VALUES ('01T1', 'x', '', '');",
+            )
+            .unwrap();
+        let (conn, _) = open_with(&path, false).unwrap();
+        let of = |id: &str| -> (Option<String>, String) {
+            conn.query_row("SELECT number, title FROM nodes WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            of("01T1"),
+            (Some("23".into()), "Complete the todo commands".into())
+        );
+        assert_eq!(of("01T2"), (None, "#23 The same number again".into()));
+        assert_eq!(of("01T3"), (Some("4.1".into()), "A child".into()));
+        assert_eq!(of("01T4").0, None);
+        assert_eq!(of("01T5").0, None);
+        assert_eq!(of("01N1"), (None, "#7 A note keeps its title".into()));
+        // The search index has the new title, and the next number is after
+        // the highest one that was found.
+        let indexed: String = conn
+            .query_row(
+                "SELECT title FROM nodes_fts WHERE node_id = '01T1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            indexed.contains("complet") && !indexed.contains("23"),
+            "{indexed}"
+        );
+        assert_eq!(crate::store::next_number(&conn, "01C", None).unwrap(), "24");
+        assert_eq!(
+            crate::store::next_number(&conn, "01C", Some("4")).unwrap(),
+            "4.2"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

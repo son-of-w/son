@@ -212,6 +212,15 @@ fn changes(before: Option<&Node>, after: &Node) -> Vec<String> {
             after.priority.as_deref().unwrap_or("none")
         ));
     }
+    if before.number != after.number {
+        let show =
+            |n: &Option<String>| n.as_ref().map(|n| format!("#{n}")).unwrap_or("none".into());
+        parts.push(format!(
+            "number {} → {}",
+            show(&before.number),
+            show(&after.number)
+        ));
+    }
     if before.stale_at != after.stale_at {
         parts.push(match &after.stale_at {
             Some(_) => format!(

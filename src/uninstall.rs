@@ -77,9 +77,9 @@ fn plan(path: &Path, is_skill: bool) -> Option<Plan> {
     if is_skill {
         // The file says it is managed by `son init`, and `init` replaces
         // it without asking; a copy changed by hand is deleted too.
-        return text
-            .contains(instructions::SKILL_MARK)
-            .then_some(Plan::DeleteSkill);
+        let ours =
+            text.contains(instructions::SKILL_MARK) || text.contains(instructions::TODO_SKILL_MARK);
+        return ours.then_some(Plan::DeleteSkill);
     }
     match instructions::find_block(&text) {
         Ok(None) => None,
@@ -118,6 +118,7 @@ fn candidates(opts: &Options, root: &Path) -> Result<Vec<(PathBuf, bool)>> {
         for scope in scopes {
             for (path, is_skill) in [
                 (agent.skill_file(*scope, root), true),
+                (agent.todo_skill_file(*scope, root), true),
                 (agent.rules_file(*scope, root), false),
             ] {
                 if let Some(path) = path {

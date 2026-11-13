@@ -86,9 +86,10 @@ pub fn line(node: &Node) -> String {
         _ => String::new(),
     };
     format!(
-        "`{}` [{}]{status} {} ({}){}",
+        "`{}` [{}]{status} {}{} ({}){}",
         node.short(),
         node.kind,
+        number_mark(node),
         node.title,
         node.project_name(),
         tags(node)
@@ -172,6 +173,12 @@ pub fn show(
     ];
     if let Some(status) = &node.status {
         facts.push(format!("status: {status}"));
+    }
+    if let Some(number) = &node.number {
+        facts.push(format!("number: #{number}"));
+    }
+    if let Some(priority) = &node.priority {
+        facts.push(format!("priority: {priority}"));
     }
     if !node.tags.is_empty() {
         facts.push(format!("tags: {}", node.tags.join(", ")));
@@ -665,9 +672,65 @@ fn todo_box(node: &Node) -> &'static str {
     }
 }
 
+/// `#4.1 ` before a todo that has a number, else nothing.
+fn number_mark(node: &Node) -> String {
+    node.number
+        .as_ref()
+        .map(|n| format!("#{n} "))
+        .unwrap_or_default()
+}
+
+/// Todos as a tree: each with its depth, children straight after their
+/// parent. A child is a todo whose number starts with the number of
+/// another todo of the same collection (`4.1` under `4`); when its parent
+/// is not in the list, it is under the nearest one that is, or at the
+/// top. Among the children of one parent the order is
+/// [`crate::store::todo_order`].
+pub fn todo_tree(nodes: &[Node]) -> Vec<(usize, &Node)> {
+    use std::collections::HashMap;
+    let key = |project: &Option<String>, number: &str| {
+        format!("{}\u{0}{number}", project.as_deref().unwrap_or(""))
+    };
+    let by_number: HashMap<String, usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(at, node)| node.number.as_ref().map(|n| (key(&node.project_id, n), at)))
+        .collect();
+    let mut children: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
+    for (at, node) in nodes.iter().enumerate() {
+        let mut parent = None;
+        let mut number = node.number.as_deref();
+        while let Some(above) = number.and_then(crate::store::parent_number) {
+            if let Some(found) = by_number.get(&key(&node.project_id, above)) {
+                parent = Some(*found);
+                break;
+            }
+            number = Some(above);
+        }
+        children.entry(parent).or_default().push(at);
+    }
+    for list in children.values_mut() {
+        list.sort_by(|a, b| crate::store::todo_order(&nodes[*a], &nodes[*b]));
+    }
+    let mut out = Vec::with_capacity(nodes.len());
+    let mut stack: Vec<(usize, usize)> = children
+        .get(&None)
+        .map(|roots| roots.iter().rev().map(|at| (0, *at)).collect())
+        .unwrap_or_default();
+    while let Some((depth, at)) = stack.pop() {
+        out.push((depth, &nodes[at]));
+        if let Some(below) = children.get(&Some(at)) {
+            stack.extend(below.iter().rev().map(|child| (depth + 1, *child)));
+        }
+    }
+    out
+}
+
 pub fn todos(nodes: &[Node], scope: &str, json: bool) {
+    let tree = todo_tree(nodes);
     if json {
-        print_json(&nodes_json(nodes));
+        let list: Vec<Value> = tree.iter().map(|(_, node)| node_json(node)).collect();
+        print_json(&Value::Array(list));
         return;
     }
     if nodes.is_empty() {
@@ -675,15 +738,55 @@ pub fn todos(nodes: &[Node], scope: &str, json: bool) {
         return;
     }
     println!("# Todos: {scope}");
-    for node in nodes {
+    for (depth, node) in tree {
         println!(
-            "- {} {}`{}` {} ({}){}",
+            "{}- {} {}{}`{}` {} ({}){}",
+            "  ".repeat(depth),
             todo_box(node),
             priority_mark(node),
+            number_mark(node),
             node.short(),
             node.title,
             node.project_name(),
             tags(node)
+        );
+    }
+}
+
+/// The open todos in the shape of a backlog index: one line each, the
+/// priority, the number, the title; children under their parent.
+pub fn backlog(nodes: &[Node], scope: &str, json: bool) {
+    let tree = todo_tree(nodes);
+    if json {
+        let list: Vec<Value> = tree
+            .iter()
+            .map(|(depth, node)| {
+                json!({
+                    "number": node.number,
+                    "priority": node.priority,
+                    "title": node.title,
+                    "short_id": node.short(),
+                    "id": node.id,
+                    "depth": depth,
+                    "parent": node.number.as_deref().and_then(crate::store::parent_number),
+                })
+            })
+            .collect();
+        print_json(&Value::Array(list));
+        return;
+    }
+    if nodes.is_empty() {
+        println!("No open todos for {scope}.");
+        return;
+    }
+    for (depth, node) in tree {
+        println!(
+            "{}- {}{}{} (`{}`)",
+            "  ".repeat(depth),
+            priority_mark(node),
+            number_mark(node),
+            node.title,
+            node.short()
         );
     }
 }
@@ -863,8 +966,9 @@ fn context_markdown(ctx: &Context, shape: &ContextShape) -> String {
                 "todos" => {
                     let _ = writeln!(
                         out,
-                        "- [ ] {}`{}` {}{}",
+                        "- [ ] {}{}`{}` {}{}",
                         priority_mark(node),
+                        number_mark(node),
                         node.short(),
                         node.title,
                         tags(node)

@@ -36,7 +36,7 @@ pub struct File {
 /// True when the file holds text of the user's own: not empty, not a
 /// `son` skill, and more than the `son` block.
 fn own_text(text: &str) -> bool {
-    if text.contains(instructions::SKILL_MARK) {
+    if text.contains(instructions::SKILL_MARK) || text.contains(instructions::TODO_SKILL_MARK) {
         return false;
     }
     let rest = match instructions::find_block(text) {

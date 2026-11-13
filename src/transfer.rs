@@ -171,6 +171,15 @@ pub fn markdown(dump: &Dump) -> String {
     out
 }
 
+/// A todo whose number changed on the way in.
+#[derive(Serialize)]
+pub struct Renumbered {
+    pub id: String,
+    pub title: String,
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Default, Serialize)]
 pub struct ImportStats {
     pub added: usize,
@@ -179,6 +188,9 @@ pub struct ImportStats {
     /// Nodes whose stale mark or verification was taken from the file,
     /// or kept from here against a file with newer content.
     pub freshness: usize,
+    /// Todos that got another number, because theirs was in use in the
+    /// collection they arrived in.
+    pub renumbered: Vec<Renumbered>,
     /// Collections in the file that matched a local collection of the same name.
     pub merged_collections: usize,
     pub edges: usize,
@@ -324,6 +336,18 @@ pub fn node_faults(node: &Node) -> Vec<String> {
         }
         (Some(_), kind) if kind != "todo" => {
             faults.push("only a todo can have a priority".to_string());
+        }
+        _ => {}
+    }
+    match (&node.number, node.kind.as_str()) {
+        (Some(number), _) if store::parse_number(number).as_deref() != Some(number.as_str()) => {
+            faults.push(format!(
+                "number '{}' is not a todo number such as 4 or 4.1",
+                shown(number)
+            ));
+        }
+        (Some(_), kind) if kind != "todo" => {
+            faults.push("only a todo can have a number".to_string());
         }
         _ => {}
     }
@@ -517,6 +541,9 @@ pub fn import(
         // The whole import is one operation in the history.
         let mut rec = Recorder::new(conn, "import");
 
+        // Todos that are written by this import and have a number: it is
+        // set after all rows are in, parents first (see below).
+        let mut numbered: Vec<&Node> = Vec::new();
         let mut remap: HashMap<&str, String> = HashMap::new();
         for node in dump
             .nodes
@@ -619,6 +646,12 @@ pub fn import(
                     node.priority
                 ],
             )?;
+            if node.number.is_some() && node.kind == "todo" {
+                // The row has no number for now, so that it does not
+                // stand in the way of another row of this file.
+                store::set_number(conn, &node.id, None)?;
+                numbered.push(node);
+            }
             match stored.as_ref().filter(|_| !take_marks) {
                 // Newer content from the file, and later marks from here:
                 // the marks here were made after that content was written.
@@ -633,6 +666,92 @@ pub fn import(
             store::set_tags(conn, &node.id, &node.tags)?;
             store::set_refs(conn, &node.id, &node.refs)?;
             store::reindex(conn, an, &node.id)?;
+        }
+
+        // Give the arriving todos their numbers. A number counts in one
+        // collection. When another todo there has it, the arriving todo
+        // gets the next free number; its children arrive under the new
+        // number (4.1 is 31.1 when 4 became 31).
+        numbered.sort_by_key(|node| {
+            (
+                node.project_id.clone(),
+                store::number_key(node.number.as_deref().unwrap_or_default()),
+            )
+        });
+        // First the todos whose number is free, so that they keep it. A
+        // todo under a parent of this file that must change waits: it
+        // goes where its parent goes.
+        let place = |node: &Node| -> Option<(String, String)> {
+            Some((
+                node.project_id.as_deref().map(mapped)?,
+                node.number.clone()?,
+            ))
+        };
+        let mut taken: HashSet<(String, String)> = HashSet::new();
+        for node in &numbered {
+            if let Some((collection, number)) = place(node) {
+                if store::find_by_number(conn, &collection, &number)?.is_some() {
+                    taken.insert((collection, number));
+                }
+            }
+        }
+        let waits = |collection: &str, number: &str| {
+            let mut at = Some(number);
+            while let Some(part) = at {
+                if taken.contains(&(collection.to_string(), part.to_string())) {
+                    return true;
+                }
+                at = store::parent_number(part);
+            }
+            false
+        };
+        let mut later: Vec<&Node> = Vec::new();
+        for node in numbered {
+            let Some((collection, number)) = place(node) else {
+                continue;
+            };
+            if waits(&collection, &number)
+                || store::find_by_number(conn, &collection, &number)?.is_some()
+            {
+                later.push(node);
+            } else {
+                store::note_number(conn, &collection, &number)?;
+                store::set_number(conn, &node.id, Some(&number))?;
+            }
+        }
+        // Then the rest, parents before children.
+        let mut moved: HashMap<(String, String), String> = HashMap::new();
+        for node in later {
+            let Some((collection, number)) = place(node) else {
+                continue;
+            };
+            let number = number.as_str();
+            // Under a parent that got a new number, the same last part.
+            let wanted = match store::parent_number(number)
+                .and_then(|above| moved.get(&(collection.clone(), above.to_string())))
+            {
+                Some(new_parent) => format!(
+                    "{new_parent}.{}",
+                    number.rsplit('.').next().unwrap_or_default()
+                ),
+                None => number.to_string(),
+            };
+            let given = if store::find_by_number(conn, &collection, &wanted)?.is_some() {
+                store::next_number(conn, &collection, store::parent_number(&wanted))?
+            } else {
+                store::note_number(conn, &collection, &wanted)?;
+                wanted
+            };
+            store::set_number(conn, &node.id, Some(&given))?;
+            if given != number {
+                moved.insert((collection, number.to_string()), given.clone());
+                stats.renumbered.push(Renumbered {
+                    id: node.id.clone(),
+                    title: node.title.clone(),
+                    from: number.to_string(),
+                    to: given,
+                });
+            }
         }
 
         for edge in &dump.edges {

@@ -33,12 +33,157 @@ pub fn parse_priority(text: &str) -> Result<Option<String>> {
     ))
 }
 
-/// The order of todos in a list: by priority, a todo with none after
-/// `p4`, then oldest first (an id sorts by the time it was made).
+/// A todo number as it is stored, from what a person typed: `4`, `#4`,
+/// `4.1`. `None` when the text is not a number of that form.
+pub fn parse_number(text: &str) -> Option<String> {
+    let text = text.trim();
+    let text = text.strip_prefix('#').unwrap_or(text);
+    if text.is_empty() {
+        return None;
+    }
+    let parts: Option<Vec<String>> = text
+        .split('.')
+        .map(|part| {
+            let digits =
+                !part.is_empty() && part.len() <= 9 && part.bytes().all(|b| b.is_ascii_digit());
+            digits
+                .then(|| part.parse::<u32>().ok())
+                .flatten()
+                .filter(|n| *n > 0)
+                .map(|n| n.to_string())
+        })
+        .collect();
+    parts.map(|parts| parts.join("."))
+}
+
+/// The parts of a number, to compare by: `4.10` is after `4.9`.
+pub fn number_key(number: &str) -> Vec<u32> {
+    number
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+/// The number of the parent of `number`: `4` for `4.1`; `None` for a
+/// number of the top level.
+pub fn parent_number(number: &str) -> Option<&str> {
+    number.rsplit_once('.').map(|(parent, _)| parent)
+}
+
+/// The order of todos among the children of one parent: by priority, a
+/// todo with none after `p4`; then by number, a todo with none after
+/// those that have one; then oldest first (an id sorts by the time it
+/// was made).
 pub fn todo_order(a: &Node, b: &Node) -> std::cmp::Ordering {
-    let rank = |node: &Node| node.priority.clone().unwrap_or_else(|| "p9".to_string());
+    let rank = |node: &Node| {
+        (
+            node.priority.clone().unwrap_or_else(|| "p9".to_string()),
+            node.number.is_none(),
+            node.number.as_deref().map(number_key).unwrap_or_default(),
+        )
+    };
     (rank(a), &a.id).cmp(&(rank(b), &b.id))
 }
+
+/// The id of the todo that has `number` in the collection, dropped ones
+/// too.
+pub fn find_by_number(conn: &Connection, project_id: &str, number: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM nodes WHERE project_id = ?1 AND number = ?2",
+            params![project_id, number],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Remember that `number` was used in the collection, so that it is not
+/// given again after its todo is gone.
+pub fn note_number(conn: &Connection, project_id: &str, number: &str) -> Result<()> {
+    let parent = parent_number(number).unwrap_or("");
+    let last = number_key(number).last().copied().unwrap_or(0);
+    conn.execute(
+        "INSERT INTO todo_numbers (project_id, parent, last) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(project_id, parent) DO UPDATE SET last = max(last, excluded.last)",
+        params![project_id, parent, last],
+    )?;
+    Ok(())
+}
+
+/// A number that was never used in the collection: the next one of the
+/// top level, or the next child of `parent`. It is noted as used.
+pub fn next_number(conn: &Connection, project_id: &str, parent: Option<&str>) -> Result<String> {
+    let under = parent.unwrap_or("");
+    let noted: Option<i64> = conn
+        .query_row(
+            "SELECT last FROM todo_numbers WHERE project_id = ?1 AND parent = ?2",
+            params![project_id, under],
+            |r| r.get(0),
+        )
+        .optional()?;
+    // The numbers in use too, in case one was stored without a note.
+    let numbers: Vec<String> = conn
+        .prepare("SELECT number FROM nodes WHERE project_id = ?1 AND number IS NOT NULL")?
+        .query_map([project_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let in_use = numbers
+        .iter()
+        .filter(|number| parent_number(number).unwrap_or("") == under)
+        .filter_map(|number| number_key(number).last().copied())
+        .max()
+        .unwrap_or(0);
+    let next = (noted.unwrap_or(0).max(0) as u32).max(in_use) + 1;
+    let number = match parent {
+        Some(parent) => format!("{parent}.{next}"),
+        None => next.to_string(),
+    };
+    note_number(conn, project_id, &number)?;
+    Ok(number)
+}
+
+/// Give the todo `id` a number, or take it away. The content time does
+/// not change.
+pub fn set_number(conn: &Connection, id: &str, number: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET number = ?2 WHERE id = ?1",
+        params![id, number],
+    )?;
+    Ok(())
+}
+
+/// The open todos that are children of the todo `id`, at any depth: by
+/// number (`4.1`, `4.1.2` under `4`) and by a `belongs_to` link.
+pub fn open_children(conn: &Connection, node: &Node) -> Result<Vec<Node>> {
+    let mut found: Vec<Node> = Vec::new();
+    if let (Some(number), Some(project_id)) = (&node.number, &node.project_id) {
+        let prefix = format!("{number}.");
+        for todo in list_nodes(conn, Some(project_id), Some("todo"), false)? {
+            if todo.status.as_deref() == Some("open")
+                && todo
+                    .number
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with(&prefix))
+            {
+                found.push(todo);
+            }
+        }
+    }
+    let linked: Vec<String> = conn
+        .prepare(
+            "SELECT e.from_id FROM edges e JOIN nodes n ON n.id = e.from_id \
+             WHERE e.to_id = ?1 AND e.relation = 'belongs_to' AND n.type = 'todo' \
+               AND n.status = 'open' AND n.deleted_at IS NULL",
+        )?
+        .query_map([&node.id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in linked {
+        if !found.iter().any(|known| known.id == id) {
+            found.push(get_node(conn, &id)?);
+        }
+    }
+    Ok(found)
+}
+
 pub const RELATIONS: [&str; 5] = [
     "belongs_to",
     "relates_to",
@@ -55,9 +200,9 @@ pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p
     n.evidence, n.verified_at, n.verified_by, n.verified_note, \
     (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
        FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value)), \
-    n.merged_into, n.stale_at, n.stale_note, n.priority, n.freshness_at";
+    n.merged_into, n.stale_at, n.stale_note, n.priority, n.freshness_at, n.number";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 26;
+pub const NCOLS: usize = 27;
 
 /// How a piece of knowledge was learned. This says where it came from, not
 /// that it is true. A node with none of these has unknown provenance.
@@ -184,6 +329,10 @@ pub struct Node {
     /// which copy of a node has the later marks.
     #[serde(default)]
     pub freshness_at: Option<String>,
+    /// For a todo: its number in its collection, such as `4` or `4.1`
+    /// (a child of `4`). `None` for a todo from before numbers.
+    #[serde(default)]
+    pub number: Option<String>,
 }
 
 impl Node {
@@ -258,6 +407,7 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
         stale_note: row.get(23)?,
         priority: row.get(24)?,
         freshness_at: row.get(25)?,
+        number: row.get(26)?,
     })
 }
 
@@ -290,6 +440,8 @@ pub struct NewNode<'a> {
     pub evidence: Option<&'a str>,
     pub refs: &'a [Ref],
     pub priority: Option<&'a str>,
+    /// For a todo: its number. The caller gets it from [`next_number`].
+    pub number: Option<&'a str>,
 }
 
 /// Run `f` inside one write transaction. The lock is taken at the start, so
@@ -376,7 +528,7 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
              evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
              deleted_at = ?11, merged_into = ?12, stale_at = ?13, stale_note = ?14, \
-             priority = ?15, \
+             priority = ?15, number = ?16, \
              freshness_at = CASE WHEN verified_at IS NOT ?8 OR stale_at IS NOT ?13 \
                                  THEN {NOW} ELSE freshness_at END, \
              updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
@@ -396,7 +548,8 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             node.merged_into,
             node.stale_at,
             node.stale_note,
-            node.priority
+            node.priority,
+            node.number
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;
@@ -456,6 +609,7 @@ pub fn ensure_project(conn: &Connection, an: &Analyzer, meta: &Meta, name: &str)
             evidence: None,
             refs: &[],
             priority: None,
+            number: None,
         },
     )
 }
@@ -464,8 +618,8 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
     let id = ulid::Ulid::generate().to_string();
     conn.execute(
         &format!(
-            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author, evidence, priority) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8, ?9, ?10)"
+            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author, evidence, priority, number) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8, ?9, ?10, ?11)"
         ),
         params![
             id,
@@ -477,7 +631,8 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
             meta.source,
             meta.author,
             new.evidence,
-            new.priority
+            new.priority,
+            new.number
         ],
     )?;
     set_tags(conn, &id, new.tags)?;
@@ -492,7 +647,7 @@ pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> 
     conn.execute(
         &format!(
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
-             evidence = ?7, priority = ?8, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             evidence = ?7, priority = ?8, number = ?9, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -502,7 +657,8 @@ pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> 
             node.status,
             node.project_id,
             node.evidence,
-            node.priority
+            node.priority,
+            node.number
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;

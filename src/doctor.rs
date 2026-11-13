@@ -463,7 +463,13 @@ pub fn agent_files() -> Vec<(std::path::PathBuf, bool, FileState)> {
             if !instructions::is_installed_in(&text) {
                 return None;
             }
-            let state = if is_skill {
+            let state = if text.contains(instructions::TODO_SKILL_MARK) {
+                if text == instructions::todo_skill(&instructions::skill_name_of(&path)) {
+                    FileState::Current
+                } else {
+                    FileState::Stale
+                }
+            } else if is_skill {
                 if text == instructions::skill() {
                     FileState::Current
                 } else {

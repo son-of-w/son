@@ -340,7 +340,7 @@ fn todos_have_a_priority_and_can_be_opened_again() {
     let places: Vec<usize> = want.iter().map(|id| position(&list, id)).collect();
     assert!(places.windows(2).all(|w| w[0] < w[1]), "{list}");
     assert!(
-        list.contains("- [ ] P0 `") && list.contains("- [ ] `"),
+        list.contains("- [ ] P0 #3 `") && list.contains("- [ ] #1 `"),
         "{list}"
     );
     let json = sb.ok("alpha", &["--json", "todo", "list"]).json();
@@ -357,7 +357,7 @@ fn todos_have_a_priority_and_can_be_opened_again() {
     let context = sb.ok("alpha", &["context"]).stdout;
     let places: Vec<usize> = want.iter().map(|id| position(&context, id)).collect();
     assert!(places.windows(2).all(|w| w[0] < w[1]), "{context}");
-    assert!(context.contains("- [ ] P0 `"), "{context}");
+    assert!(context.contains("- [ ] P0 #3 `"), "{context}");
 
     // Change it, take it away, and undo.
     let out = sb.ok("alpha", &["edit", &low, "--priority", "p1"]).stdout;
@@ -2126,11 +2126,12 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
         found.sort();
         found
     };
-    // Bring a database back to schema 8: take away what schemas 9 to 11 added.
+    // Bring a database back to schema 8: take away what schemas 9 to 12 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "ALTER TABLE nodes DROP COLUMN freshness_at; ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
+            "DROP INDEX nodes_number; DROP TABLE todo_numbers; ALTER TABLE nodes DROP COLUMN number; \
+             ALTER TABLE nodes DROP COLUMN freshness_at; ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
              ALTER TABLE nodes DROP COLUMN stale_note; PRAGMA user_version = 8;",
         )
         .unwrap();
@@ -2138,7 +2139,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
 
     // A new database: created, and no copy.
     let first = sb.ok("alpha", &["init", "--db-only"]).stdout;
-    assert!(first.contains("database: created (schema 11)"), "{first}");
+    assert!(first.contains("database: created (schema 12)"), "{first}");
     let again = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
     assert_eq!(again["database_state"]["state"], "current");
     assert!(copies().is_empty());
@@ -2153,7 +2154,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let state = &report["database_state"];
     assert_eq!(state["state"], "upgraded");
     assert_eq!(state["from"], 8);
-    assert_eq!(state["schema"], 11);
+    assert_eq!(state["schema"], 12);
     let found = copies();
     assert_eq!(found.len(), 1);
     assert_eq!(state["copy"], found[0].display().to_string());
@@ -2168,7 +2169,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let out = sb.ok("alpha", &["--json", "list"]);
     assert!(
         out.stderr
-            .contains("son: database: upgraded from schema 8 to 11"),
+            .contains("son: database: upgraded from schema 8 to 12"),
         "{}",
         out.stderr
     );
@@ -2949,6 +2950,485 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
     let empty = Sandbox::new("seed-empty");
     empty.ok("alpha", &["seed"]);
     assert!(!empty.root.join("son.db").exists());
+}
+
+#[test]
+fn todos_have_numbers_parents_and_a_backlog() {
+    let sb = Sandbox::new("todo-numbers");
+    let json = |args: &[&str]| -> Value {
+        let mut full = vec!["--json"];
+        full.extend(args);
+        sb.ok("alpha", &full).json()
+    };
+    let add = |args: &[&str]| -> Value {
+        let mut full = vec!["todo", "add"];
+        full.extend(args);
+        json(&full)
+    };
+    let number = |node: &Value| node["number"].as_str().unwrap().to_string();
+
+    // Numbers count up in a collection; a child counts under its parent.
+    let one = add(&["Version two", "--priority", "p1"]);
+    let two = add(&["Improve import errors", "--priority", "p2"]);
+    assert_eq!((number(&one), number(&two)), ("1".into(), "2".into()));
+    let child = add(&["Shared collections", "--parent", "1", "--priority", "p1"]);
+    let child_low = add(&["Remote diagnostics", "--parent", "#1", "--priority", "p3"]);
+    let by_id = add(&["Sync", "--parent", one["short_id"].as_str().unwrap()]);
+    assert_eq!(number(&child), "1.1");
+    assert_eq!(number(&child_low), "1.2");
+    assert_eq!(number(&by_id), "1.3");
+    let grandchild = add(&["Conflict rule", "--parent", "1.1"]);
+    assert_eq!(number(&grandchild), "1.1.1");
+    // Another collection has its own count.
+    let other = sb.ok("beta", &["--json", "todo", "add", "In beta"]).json();
+    assert_eq!(number(&other), "1");
+
+    // A child is linked to its parent.
+    let shown = json(&["show", "1.1"]);
+    assert_eq!(shown["title"], "Shared collections");
+    let links = shown["links"].as_array().unwrap();
+    assert!(links.iter().any(|l| l["node"]["number"] == "1"), "{shown}");
+
+    // A number of the caller's choice, for a backlog that has numbers.
+    let chosen = add(&[
+        "From a file",
+        "--number",
+        "7",
+        "--status",
+        "done",
+        "--body",
+        "old detail",
+    ]);
+    assert_eq!(
+        (number(&chosen), chosen["status"].as_str().unwrap()),
+        ("7".into(), "done")
+    );
+    assert_eq!(number(&add(&["Child by number", "--number", "7.2"])), "7.2");
+    assert_eq!(number(&add(&["The next child", "--parent", "7"])), "7.3");
+    assert_eq!(number(&add(&["The next of the top"])), "8");
+    for (args, part) in [
+        (vec!["todo", "add", "Used", "--number", "7"], "already used"),
+        (
+            vec!["todo", "add", "No parent", "--number", "9.1"],
+            "no todo here has the number #9",
+        ),
+        (
+            vec![
+                "todo",
+                "add",
+                "Wrong parent",
+                "--number",
+                "7.9",
+                "--parent",
+                "1",
+            ],
+            "--parent names #1",
+        ),
+        (
+            vec![
+                "todo",
+                "add",
+                "Top with parent",
+                "--number",
+                "20",
+                "--parent",
+                "1",
+            ],
+            "top level",
+        ),
+        (
+            vec!["todo", "add", "Bad", "--number", "4.x"],
+            "not a todo number",
+        ),
+        (
+            vec!["todo", "add", "Bad", "--number", "0"],
+            "not a todo number",
+        ),
+        (
+            vec!["todo", "add", "Bad", "--status", "later"],
+            "status is one of",
+        ),
+        (
+            vec!["todo", "add", "Bad", "--parent", "55"],
+            "no todo has the number",
+        ),
+    ] {
+        let out = sb.son("alpha", &args);
+        assert!(
+            !out.ok && out.stderr.contains(part),
+            "{args:?}: {}",
+            out.stderr
+        );
+    }
+    let note = sb.ok("alpha", &["remember", "note", "Not a todo"]).id();
+    assert!(
+        !sb.son("alpha", &["todo", "add", "Under a note", "--parent", &note])
+            .ok
+    );
+    assert!(
+        !sb.son(
+            "alpha",
+            &[
+                "todo",
+                "add",
+                "Other collection",
+                "--parent",
+                other["short_id"].as_str().unwrap()
+            ]
+        )
+        .ok
+    );
+
+    // The list is a tree: children under their parent, and among the
+    // children of one parent the most urgent first, then by number.
+    let list = sb.ok("alpha", &["todo", "list"]).stdout;
+    let lines: Vec<&str> = list.lines().skip(1).collect();
+    let want = [
+        "- [ ] P1 #1 ",
+        "  - [ ] P1 #1.1 ",
+        "    - [ ] #1.1.1 ",
+        "  - [ ] P3 #1.2 ",
+        "  - [ ] #1.3 ",
+        "- [ ] P2 #2 ",
+        "- [ ] #7.2 ",
+        "- [ ] #7.3 ",
+        "- [ ] #8 ",
+    ];
+    assert_eq!(lines.len(), want.len(), "{list}");
+    for (line, start) in lines.iter().zip(want) {
+        assert!(line.starts_with(start), "want '{start}' in:\n{list}");
+    }
+    // The backlog: the same order, in the shape of a backlog index.
+    let backlog = sb.ok("alpha", &["todo", "backlog"]).stdout;
+    let first: Vec<&str> = backlog.lines().take(3).collect();
+    assert!(first[0].starts_with("- P1 #1 Version two (`"), "{backlog}");
+    assert!(
+        first[1].starts_with("  - P1 #1.1 Shared collections (`"),
+        "{backlog}"
+    );
+    assert!(
+        first[2].starts_with("    - #1.1.1 Conflict rule (`"),
+        "{backlog}"
+    );
+    assert_eq!(backlog.lines().count(), want.len());
+    let rows = json(&["todo", "backlog"]);
+    assert_eq!(rows[1]["number"], "1.1");
+    assert_eq!(rows[1]["parent"], "1");
+    assert_eq!(rows[1]["depth"], 1);
+    assert!(sb
+        .ok("beta", &["todo", "backlog"])
+        .stdout
+        .contains("#1 In beta"));
+    assert!(
+        !sb.son("alpha", &["todo", "backlog", "--collection", "nope"])
+            .ok
+    );
+
+    // A number works where a command takes a todo, with or without #.
+    sb.ok("alpha", &["edit", "1.2", "--priority", "p0"]);
+    assert_eq!(json(&["show", "#1.2"])["priority"], "p0");
+    let found = sb.ok("alpha", &["recall", "1.2"]).stdout;
+    assert!(position(&found, "Remote diagnostics") < 200, "{found}");
+
+    // A parent with open children cannot be done.
+    let out = sb.son("alpha", &["todo", "done", "1"]);
+    assert!(
+        !out.ok && out.stderr.contains("open child todo(s)"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("Shared collections"));
+    assert!(
+        !sb.son("alpha", &["todo", "done", "1.1"]).ok,
+        "it has a child too"
+    );
+    // A child can; with a note on what shows that it is done.
+    let done = json(&["todo", "done", "1.1.1", "--note", "make check passed"]);
+    assert_eq!(done["status"], "done");
+    let body = done["body"].as_str().unwrap();
+    assert!(
+        body.contains("Completed 20") && body.ends_with(": make check passed"),
+        "{body}"
+    );
+    sb.ok("alpha", &["todo", "done", "1.1"]);
+    sb.ok("alpha", &["todo", "done", "1.2"]);
+    sb.ok("alpha", &["todo", "done", "1.3"]);
+    sb.ok("alpha", &["todo", "done", "1"]);
+    // Done todos are kept and can be listed, as a tree too.
+    let all = sb.ok("alpha", &["todo", "list", "--done"]).stdout;
+    assert!(
+        all.contains("- [x] P1 #1 ") && all.contains("  - [x] P1 #1.1 "),
+        "{all}"
+    );
+
+    // A number is never given again, also after its todo is purged.
+    sb.ok("alpha", &["drop", "8", "--purge"]);
+    assert_eq!(number(&add(&["After the purge"])), "9");
+    sb.ok("alpha", &["drop", "7.3", "--purge"]);
+    assert_eq!(
+        number(&add(&["Child after the purge", "--parent", "7"])),
+        "7.4"
+    );
+
+    // A move to another collection: the number is kept when it is free
+    // there, and a new one is given when it is not.
+    let moved = sb
+        .ok("alpha", &["edit", "2", "--collection", "beta"])
+        .stdout;
+    assert!(moved.contains("#2 Improve import errors (beta)"), "{moved}");
+    assert!(!moved.contains("number changed"));
+    let moved = sb
+        .ok(
+            "alpha",
+            &[
+                "--json",
+                "edit",
+                two["short_id"].as_str().unwrap(),
+                "--collection",
+                "alpha",
+            ],
+        )
+        .json();
+    assert_eq!(moved["number"], "2", "back again, the number is still free");
+    // Beta has a #1 of its own, and #2 was used there for a while: the
+    // todo that arrives with #1 gets the next number that was never used.
+    let moved = sb
+        .ok("alpha", &["edit", "1", "--collection", "beta"])
+        .stdout;
+    assert!(
+        moved.contains("The todo number changed from #1 to #3"),
+        "{moved}"
+    );
+    // A child that moves alone is a todo of the top level there.
+    let moved = sb
+        .ok("alpha", &["--json", "edit", "7.2", "--collection", "beta"])
+        .json();
+    assert_eq!(moved["number"], "4");
+    assert_eq!(moved["renumbered_from"], "7.2");
+    // A type that is not a todo has no number; a todo made from a note
+    // gets one.
+    let made = json(&["edit", &note, "--type", "todo"]);
+    assert_eq!(made["number"], "10");
+    assert!(json(&["edit", &note, "--type", "note"])["number"].is_null());
+
+    // A repeat with the same key gives the same todo, number and all.
+    let keyed = ["todo", "add", "Keyed", "--parent", "7", "--key", "n1"];
+    let first = add(&keyed[2..]);
+    assert_eq!(add(&keyed[2..])["number"], first["number"]);
+}
+
+#[test]
+fn an_import_gives_a_new_number_to_a_todo_whose_number_is_in_use() {
+    let a = Sandbox::new("renumber-a");
+    let b = Sandbox::new("renumber-b");
+    let file = a.root.join("out.json");
+    // Two machines, the same collection name, and each has a #1 and a #2.
+    a.ok("alpha", &["todo", "add", "Parent from A"]);
+    a.ok("alpha", &["todo", "add", "Child from A", "--parent", "1"]);
+    a.ok("alpha", &["todo", "add", "Second from A"]);
+    b.ok("alpha", &["todo", "add", "First of B"]);
+    std::fs::write(&file, a.ok("alpha", &["--json", "export"]).stdout).unwrap();
+    let stats = b
+        .ok("alpha", &["--json", "import", file.to_str().unwrap()])
+        .json();
+    let changes = stats["renumbered"].as_array().unwrap();
+    // #1 of A is #3 here (2 is taken by "Second from A", which keeps it);
+    // its child follows it.
+    let of = |title: &str| -> (String, String) {
+        let change = changes
+            .iter()
+            .find(|c| c["title"] == title)
+            .unwrap_or_else(|| panic!("{title} is not in {stats}"));
+        (
+            change["from"].as_str().unwrap().to_string(),
+            change["to"].as_str().unwrap().to_string(),
+        )
+    };
+    let (from, to) = of("Parent from A");
+    assert_eq!(from, "1");
+    assert_eq!(of("Child from A"), ("1.1".to_string(), format!("{to}.1")));
+    assert_eq!(changes.len(), 2, "{stats}");
+    let backlog = b.ok("alpha", &["todo", "backlog"]).stdout;
+    assert!(backlog.contains("#1 First of B"), "{backlog}");
+    assert!(backlog.contains("#2 Second from A"), "{backlog}");
+    assert!(
+        backlog.contains(&format!("- #{to} Parent from A")),
+        "{backlog}"
+    );
+    assert!(
+        backlog.contains(&format!("  - #{to}.1 Child from A")),
+        "{backlog}"
+    );
+    // The text report says it too, and a second import changes nothing.
+    let again = b.ok("alpha", &["import", file.to_str().unwrap()]).stdout;
+    assert!(!again.contains("has the number"), "{again}");
+    assert_eq!(b.ok("alpha", &["todo", "backlog"]).stdout, backlog);
+    // An import refuses a number that is not one, and one on a note.
+    let export = a.ok("alpha", &["--json", "export"]).stdout;
+    std::fs::write(
+        &file,
+        export.replace("\"number\": \"1.1\"", "\"number\": \"1.x\""),
+    )
+    .unwrap();
+    let out = b.son("alpha", &["import", file.to_str().unwrap()]);
+    assert!(
+        out.stderr.contains("is not a todo number"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn init_installs_the_todo_skill_only_when_asked() {
+    let sb = Sandbox::new("todo-skill");
+    let home = sb.root.join("home");
+    let skills = home.join(".claude/skills");
+    let todo = skills.join("todo/SKILL.md");
+    let mark = "This file is the son todo skill";
+    let step = |args: &[&str]| -> Value {
+        let mut full = vec!["--json", "init", "-a", "claude-code", "-g"];
+        full.extend(args);
+        sb.ok("alpha", &full).json()["installs"][0].clone()
+    };
+
+    // A plain init installs no todo skill and does not speak of one.
+    let plain = step(&[]);
+    assert!(plain.get("todo_skill").is_none(), "{plain}");
+    assert!(!todo.exists());
+
+    // Asked for: it is written, under the name todo, and holds its name.
+    let asked = step(&["--todo-skill"]);
+    assert_eq!(asked["todo_skill"]["result"], "created");
+    let text = std::fs::read_to_string(&todo).unwrap();
+    assert!(text.starts_with("---\nname: todo\ndescription: "), "{text}");
+    assert!(text.contains(mark) && text.contains("son todo backlog"));
+    // Every command the skill names is a real command or flag.
+    for line in [
+        vec![
+            "todo",
+            "add",
+            "From the skill",
+            "--priority",
+            "p2",
+            "--parent",
+            "1",
+            "--check",
+        ],
+        vec!["todo", "backlog"],
+        vec!["todo", "list", "--done"],
+    ] {
+        if line.contains(&"--parent") {
+            sb.ok("alpha", &["todo", "add", "A parent"]);
+        }
+        sb.ok("alpha", &line);
+    }
+
+    // Again, with or without the flag: in place, never twice.
+    assert_eq!(step(&["--todo-skill"])["todo_skill"]["result"], "unchanged");
+    std::fs::write(&todo, text.replace("son todo backlog", "son todo bcklog")).unwrap();
+    assert_eq!(step(&[])["todo_skill"]["result"], "updated");
+    assert_eq!(std::fs::read_to_string(&todo).unwrap(), text);
+    let count = || {
+        files_under(&skills)
+            .iter()
+            .filter(|f| {
+                std::fs::read_to_string(skills.join(f))
+                    .unwrap()
+                    .contains(mark)
+            })
+            .count()
+    };
+    assert_eq!(count(), 1);
+
+    // Doctor reports it; context warns when it is from another version.
+    std::fs::write(&todo, text.replace("son todo backlog", "son todo bcklog")).unwrap();
+    let report = sb.ok("alpha", &["--json", "doctor"]).json();
+    assert!(report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["status"] == "stale"
+            && c["detail"]
+                .as_str()
+                .unwrap()
+                .contains("skills/todo/SKILL.md")));
+    let warnings = sb.ok("alpha", &["--json", "context"]).json()["setup_warnings"].clone();
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("skills/todo/SKILL.md"),
+        "{warnings}"
+    );
+    step(&[]);
+
+    // Another name: the skill moves, and there is still one.
+    let renamed = step(&["--todo-skill-name", "backlog"]);
+    assert_eq!(renamed["todo_skill"]["result"], "created");
+    assert!(!todo.exists() && !todo.parent().unwrap().exists());
+    let moved = std::fs::read_to_string(skills.join("backlog/SKILL.md")).unwrap();
+    assert!(moved.starts_with("---\nname: backlog\n"));
+    assert_eq!(count(), 1);
+    for bad in ["son", "Has Space", "-x", ""] {
+        let out = sb.son(
+            "alpha",
+            &["init", "-a", "claude-code", "-g", "--todo-skill-name", bad],
+        );
+        assert!(!out.ok, "'{bad}' must be refused");
+    }
+
+    // Uninstall removes it.
+    sb.ok("alpha", &["uninstall", "--yes"]);
+    assert_eq!(count(), 0);
+    assert!(!skills.join("backlog").exists());
+
+    // A skill named todo that is the user's own: left as it is and said
+    // so, unless a name or the overwrite flag is given.
+    let own = "---\nname: todo\n---\n# My own todo skill\n";
+    std::fs::create_dir_all(todo.parent().unwrap()).unwrap();
+    std::fs::write(&todo, own).unwrap();
+    let left = step(&["--todo-skill"]);
+    assert_eq!(left["todo_skill"]["result"], "left");
+    assert!(left["todo_skill"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("--overwrite-todo-skill"));
+    assert_eq!(std::fs::read_to_string(&todo).unwrap(), own);
+    let text_out = sb
+        .ok(
+            "alpha",
+            &["init", "-a", "claude-code", "-g", "--todo-skill"],
+        )
+        .stdout;
+    assert!(text_out.contains("todo   LEFT"), "{text_out}");
+    // Uninstall and seed do not take the user's own skill for son's.
+    sb.ok("alpha", &["uninstall", "--yes"]);
+    assert_eq!(std::fs::read_to_string(&todo).unwrap(), own);
+
+    let named = step(&["--todo-skill-name", "son-todo"]);
+    assert_eq!(named["todo_skill"]["result"], "created");
+    assert_eq!(std::fs::read_to_string(&todo).unwrap(), own);
+    assert!(skills.join("son-todo/SKILL.md").exists());
+    sb.ok("alpha", &["uninstall", "--yes"]);
+
+    let over = step(&["--overwrite-todo-skill"]);
+    assert_eq!(over["todo_skill"]["result"], "updated");
+    assert!(std::fs::read_to_string(&todo).unwrap().contains(mark));
+    assert_eq!(count(), 1);
+
+    // A project scope install goes into the project's skills folder.
+    sb.ok(
+        "alpha",
+        &[
+            "init",
+            "-a",
+            "claude-code",
+            "--scope",
+            "project",
+            "--todo-skill",
+        ],
+    );
+    assert!(sb.root.join("alpha/.claude/skills/todo/SKILL.md").exists());
 }
 
 /// A text of the form of a Stripe live key. Joined at run time, so that
@@ -4480,12 +4960,12 @@ fn doctor_reports_and_changes_nothing() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
-    raw().execute_batch("PRAGMA user_version = 11").unwrap();
+    raw().execute_batch("PRAGMA user_version = 12").unwrap();
     raw().execute_batch("PRAGMA user_version = 999").unwrap();
     let (ok, report) = status(&sb);
     assert!(!ok);
     assert_eq!(of(&report, "schema"), "problem");
-    raw().execute_batch("PRAGMA user_version = 11").unwrap();
+    raw().execute_batch("PRAGMA user_version = 12").unwrap();
 
     // A row that points at nothing.
     raw()

@@ -57,6 +57,7 @@ impl Corpus {
                 evidence: None,
                 refs: &[],
                 priority: None,
+                number: None,
             },
         )
         .unwrap()

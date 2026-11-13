@@ -130,6 +130,18 @@ pub enum Command {
         /// Write the skill only, and leave instruction files alone
         #[arg(long)]
         skill_only: bool,
+        /// Also install the todo skill: a backlog with numbers, priorities
+        /// and parents, kept in son. A plain init does not install it
+        #[arg(long)]
+        todo_skill: bool,
+        /// The name for the todo skill (default: todo). Use it when you
+        /// have a skill named todo already. Installs the todo skill
+        #[arg(long, value_name = "NAME")]
+        todo_skill_name: Option<String>,
+        /// Replace a skill of that name that is there and is not son's.
+        /// Installs the todo skill
+        #[arg(long)]
+        overwrite_todo_skill: bool,
         /// Only create the database
         #[arg(long)]
         db_only: bool,
@@ -555,6 +567,18 @@ pub enum TodoCommand {
         /// priority is listed after p4
         #[arg(long, value_name = "P0-P4")]
         priority: Option<String>,
+        /// Make this a child of another todo: its number (4) or its id.
+        /// The child gets the next number under it (4.1)
+        #[arg(long, value_name = "TODO")]
+        parent: Option<String>,
+        /// Give the todo this number, and do not take the next free one.
+        /// For bringing in a backlog that has numbers already. 4.1 is a
+        /// child of the todo with the number 4
+        #[arg(long, value_name = "NUMBER")]
+        number: Option<String>,
+        /// The status to start with: open (the default), done or dropped
+        #[arg(long)]
+        status: Option<String>,
         /// Save nothing: only list stored todos that this may duplicate
         #[arg(long)]
         check: bool,
@@ -579,8 +603,25 @@ pub enum TodoCommand {
         #[arg(long)]
         done: bool,
     },
+    /// Print the open todos as a backlog: one line each, children under
+    /// their parent, the most urgent first
+    Backlog {
+        /// Only this collection (default: the current collection)
+        #[arg(long)]
+        collection: Option<String>,
+    },
     /// Mark a todo as done
-    Done { id: String },
+    ///
+    /// A todo with open children cannot be done: finish or drop the
+    /// children first.
+    Done {
+        /// The todo: its number (4.1) or its id
+        id: String,
+        /// What shows that it is done. It is added to the body, with
+        /// the date
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Open a todo again that was done or dropped
     Reopen { id: String },
 }

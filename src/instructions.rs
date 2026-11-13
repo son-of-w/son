@@ -80,6 +80,7 @@ Record at once, do not wait for the end of the session:
 - A stable fact is learned: `son remember fact "<title>" --body "<value>"`
 - Anything else worth keeping: `son remember note "<title>" --body "<text>"`
 - A todo appears: `son todo add "<title>"`. Add `--priority p0` to `p4` when you know how urgent it is (p0 is most urgent); the list shows the most urgent first. It is finished: `son todo done <id>`. It is not finished after all: `son todo reopen <id>`.
+- A todo gets a number in its collection, such as `#4`; the number works where a command takes a todo (`son todo done 4`). A child of another todo: `son todo add "<title>" --parent 4` makes `#4.1`. `son todo backlog` prints the open todos, children under their parent. A todo with open children cannot be done.
 - A todo is a node like the others: change its title, body or priority with `son edit <id>` (`--priority p2`, or `--priority none`), and remove it with `son drop <id>`.
 - The user says "remember this" or "I need to do this": save it with `son`.
 
@@ -120,6 +121,72 @@ Say how you learned what you save, so that a later session can judge it:
 - If a write may not have arrived (a timeout, an interrupted command), send it again with the same `--key <text>` on `son remember` or `son todo add`: it is saved once.
 "#;
 
+/// A line that only the todo skill holds. A file with it is the todo
+/// skill that `son init` wrote, whatever its folder is named.
+pub const TODO_SKILL_MARK: &str = "This file is the son todo skill";
+
+/// The name the todo skill gets when none is given.
+pub const TODO_SKILL_NAME: &str = "todo";
+
+/// The todo skill, with `{name}` where its name goes.
+const TODO_SKILL: &str = include_str!("todo_skill.md");
+
+/// The todo skill file, for a skill of this name.
+pub fn todo_skill(name: &str) -> String {
+    TODO_SKILL.replacen("{name}", name, 1)
+}
+
+/// True for a name a skill folder can have: lowercase letters, digits and
+/// `-`, and not `son`, which is the name of the other skill.
+pub fn is_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 40
+        && name != "son"
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+/// The todo skill that `son init` wrote in the skills folder `skills`, if
+/// there is one: its file, whatever its folder is named.
+pub fn find_todo_skill(skills: &Path) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(skills)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("SKILL.md"))
+        .filter(|file| {
+            std::fs::read_to_string(file).is_ok_and(|text| text.contains(TODO_SKILL_MARK))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// The name of the skill whose file is `path`: the name of its folder.
+pub fn skill_name_of(path: &Path) -> String {
+    path.parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| TODO_SKILL_NAME.to_string())
+}
+
+/// Write the todo skill at `path`, for a skill named `name`. The whole
+/// file belongs to `son`. The caller decides if a file that is there may
+/// be replaced.
+pub fn install_todo_skill(path: &Path, name: &str) -> Result<Outcome> {
+    let text = todo_skill(name);
+    let outcome = match std::fs::read_to_string(path) {
+        Ok(old) if old == text => return Ok(Outcome::Unchanged),
+        Ok(_) => Outcome::Updated,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Outcome::Created,
+        Err(err) => return Err(err).with_context(|| format!("cannot read {}", path.display())),
+    };
+    replace_file(path, &text)?;
+    Ok(outcome)
+}
+
 /// The skill file.
 pub fn skill() -> &'static str {
     SKILL
@@ -127,7 +194,10 @@ pub fn skill() -> &'static str {
 
 /// True when `text` is a `son` skill file or holds the `son` block.
 pub fn is_installed_in(text: &str) -> bool {
-    text.contains(START) || text.contains(END) || text.contains(SKILL_MARK)
+    text.contains(START)
+        || text.contains(END)
+        || text.contains(SKILL_MARK)
+        || text.contains(TODO_SKILL_MARK)
 }
 
 /// Write the skill file at `path`. The whole file belongs to `son`, so an

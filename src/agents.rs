@@ -250,6 +250,19 @@ impl Agent {
         Some(skills.join(SKILL_PATH))
     }
 
+    /// The skills folder of this agent in a scope.
+    pub fn skills_dir(&self, scope: Scope, project_root: &Path) -> Option<PathBuf> {
+        Some(match scope {
+            Scope::Global => self.global_skills.path()?,
+            Scope::Project => project_root.join(self.project_skills),
+        })
+    }
+
+    /// The todo skill that `son init` wrote for this agent, if it is there.
+    pub fn todo_skill_file(&self, scope: Scope, project_root: &Path) -> Option<PathBuf> {
+        crate::instructions::find_todo_skill(&self.skills_dir(scope, project_root)?)
+    }
+
     /// The always-on instruction file for this agent, if it has one here.
     pub fn rules_file(&self, scope: Scope, project_root: &Path) -> Option<PathBuf> {
         match scope {
@@ -297,6 +310,7 @@ pub fn candidate_files(project_root: &Path) -> Vec<(PathBuf, bool)> {
     for agent in TABLE {
         for scope in [Scope::Global, Scope::Project] {
             push(agent.skill_file(scope, project_root), true);
+            push(agent.todo_skill_file(scope, project_root), true);
             push(agent.rules_file(scope, project_root), false);
         }
     }

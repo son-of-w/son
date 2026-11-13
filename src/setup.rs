@@ -22,6 +22,14 @@ pub struct Options {
     /// Leave instruction files alone; write the skill only.
     pub skill_only: bool,
     pub json: bool,
+    /// Install the todo skill too. A plain init only brings one that is
+    /// there up to date.
+    pub todo_skill: bool,
+    /// From `--todo-skill-name`.
+    pub todo_skill_name: Option<String>,
+    /// From `--overwrite-todo-skill`: replace a skill of that name that
+    /// is not son's.
+    pub overwrite_todo_skill: bool,
 }
 
 /// What was done for one agent.
@@ -29,11 +37,139 @@ struct Installed {
     agent: Agent,
     skill: Step,
     rules: Step,
+    /// The todo skill. `None` when it was not asked for and is not there.
+    todo: Option<Step>,
+}
+
+/// What to do when a skill of the wanted name is there and is not son's.
+#[derive(Clone)]
+enum Taken {
+    /// Leave it, and say so.
+    Leave,
+    /// Replace it.
+    Overwrite,
+    /// Use this name for the todo skill.
+    Rename(String),
+}
+
+/// Ask what to do about a skill named `name` that is not son's.
+fn ask_taken(name: &str, path: &Path) -> Result<Taken> {
+    let items = [
+        "Give the son todo skill another name".to_string(),
+        format!("Overwrite {}", short(path)),
+        "Do not install the todo skill".to_string(),
+    ];
+    let picked = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!(
+            "A skill named '{name}' is there already and is not son's. What now?"
+        ))
+        .items(&items)
+        .default(0)
+        .interact()
+        .context("the choice was cancelled")?;
+    Ok(match picked {
+        0 => {
+            let new: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Name for the son todo skill")
+                .default("son-todo".to_string())
+                .validate_with(|text: &String| {
+                    if instructions::is_skill_name(text.trim()) {
+                        Ok(())
+                    } else {
+                        Err("use lowercase letters, digits and -")
+                    }
+                })
+                .interact_text()
+                .context("the name was cancelled")?;
+            Taken::Rename(new.trim().to_string())
+        }
+        1 => Taken::Overwrite,
+        _ => Taken::Leave,
+    })
+}
+
+/// Install or update the todo skill for one agent. `taken` is the answer
+/// to "a skill of that name is there", once it is known; it is asked for
+/// one time and then used for every agent.
+fn todo_step(
+    agent: &Agent,
+    scope: Scope,
+    root: &Path,
+    opts: &Options,
+    taken: &mut Option<Taken>,
+) -> Option<Step> {
+    let skills = agent.skills_dir(scope, root)?;
+    let existing = instructions::find_todo_skill(&skills);
+    let wanted = opts.todo_skill_name.clone();
+    // One that son wrote is there: bring it up to date where it is,
+    // unless another name is asked for.
+    if let Some(path) = &existing {
+        let name = instructions::skill_name_of(path);
+        if wanted.as_deref().is_none_or(|new| new == name) {
+            return Some(match instructions::install_todo_skill(path, &name) {
+                Ok(outcome) => Step::Done(path.clone(), outcome),
+                Err(err) => Step::Failed(path.clone(), format!("{err:#}")),
+            });
+        }
+    } else if !opts.todo_skill {
+        return None;
+    }
+    let mut name = wanted.unwrap_or_else(|| instructions::TODO_SKILL_NAME.to_string());
+    let mut path = skills.join(&name).join("SKILL.md");
+    let is_ours = |path: &Path| {
+        std::fs::read_to_string(path).is_ok_and(|text| text.contains(instructions::TODO_SKILL_MARK))
+    };
+    if path.exists() && !is_ours(&path) && !opts.overwrite_todo_skill {
+        if taken.is_none() {
+            *taken = Some(if !opts.yes && can_ask() {
+                match ask_taken(&name, &path) {
+                    Ok(answer) => answer,
+                    Err(err) => return Some(Step::Failed(path, format!("{err:#}"))),
+                }
+            } else {
+                Taken::Leave
+            });
+        }
+        match taken.clone().unwrap_or(Taken::Leave) {
+            Taken::Overwrite => {}
+            Taken::Rename(new) => {
+                name = new;
+                path = skills.join(&name).join("SKILL.md");
+                if path.exists() && !is_ours(&path) {
+                    return Some(Step::Left(
+                        path,
+                        "a skill of that name is there too and is not son's",
+                    ));
+                }
+            }
+            Taken::Leave => {
+                return Some(Step::Left(
+                    path,
+                    "a skill of that name is there and is not son's; it was left as it is. \
+                     Give --todo-skill-name <name> for another name, or --overwrite-todo-skill",
+                ));
+            }
+        }
+    }
+    let step = match instructions::install_todo_skill(&path, &name) {
+        Ok(outcome) => Step::Done(path.clone(), outcome),
+        Err(err) => return Some(Step::Failed(path, format!("{err:#}"))),
+    };
+    // The todo skill has a new name: the one under the old name goes.
+    if let Some(old) = existing.filter(|old| *old != path) {
+        let _ = std::fs::remove_file(&old);
+        if let Some(dir) = old.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+    Some(step)
 }
 
 enum Step {
     Done(PathBuf, Outcome),
     Failed(PathBuf, String),
+    /// A file that is there was left as it is, and why. Not a failure.
+    Left(PathBuf, &'static str),
     /// Nothing to write, and why.
     Skipped(&'static str),
 }
@@ -196,7 +332,15 @@ fn step(
     }
 }
 
-fn install(agent: Agent, scope: Scope, root: &Path, skill_only: bool) -> Installed {
+fn install(
+    agent: Agent,
+    scope: Scope,
+    root: &Path,
+    opts: &Options,
+    taken: &mut Option<Taken>,
+) -> Installed {
+    let skill_only = opts.skill_only;
+    let todo = todo_step(&agent, scope, root, opts, taken);
     let skill = step(
         agent.skill_file(scope, root),
         "the home directory is not known",
@@ -215,6 +359,7 @@ fn install(agent: Agent, scope: Scope, root: &Path, skill_only: bool) -> Install
         agent,
         skill,
         rules,
+        todo,
     }
 }
 
@@ -226,6 +371,9 @@ fn step_json(step: &Step) -> Value {
         Step::Failed(path, reason) => {
             json!({ "path": path.display().to_string(), "result": "failed", "reason": reason })
         }
+        Step::Left(path, reason) => {
+            json!({ "path": path.display().to_string(), "result": "left", "reason": reason })
+        }
         Step::Skipped(reason) => json!({ "result": "skipped", "reason": reason }),
     }
 }
@@ -236,6 +384,7 @@ fn step_line(label: &str, step: &Step) -> String {
             format!("  {label:<6} {:<9} {}", outcome.as_str(), short(path))
         }
         Step::Failed(path, reason) => format!("  {label:<6} FAILED    {} ({reason})", short(path)),
+        Step::Left(path, reason) => format!("  {label:<6} LEFT      {} ({reason})", short(path)),
         Step::Skipped(reason) => format!("  {label:<6} none      {reason}"),
     }
 }
@@ -244,6 +393,16 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
     if !opts.json {
         println!("database ready: {}", database.display());
         println!("{}", opened.line());
+    }
+    if let Some(name) = &opts.todo_skill_name {
+        if !instructions::is_skill_name(name) {
+            return Err(crate::error::coded(
+                "invalid_argument",
+                format!(
+                    "'{name}' cannot be the name of the todo skill; use lowercase letters, digits and -, and not 'son'"
+                ),
+            ));
+        }
     }
     let root = project_root()?;
     let chosen = choose_agents(opts)?;
@@ -276,24 +435,33 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
         }
     }
 
+    let mut taken: Option<Taken> = None;
     let done: Vec<Installed> = chosen
         .into_iter()
-        .map(|agent| install(agent, scope, &root, opts.skill_only))
+        .map(|agent| install(agent, scope, &root, opts, &mut taken))
         .collect();
     let failed = done
         .iter()
-        .filter(|i| matches!(i.skill, Step::Failed(..)) || matches!(i.rules, Step::Failed(..)))
+        .filter(|i| {
+            matches!(i.skill, Step::Failed(..))
+                || matches!(i.rules, Step::Failed(..))
+                || matches!(i.todo, Some(Step::Failed(..)))
+        })
         .count();
 
     if opts.json {
         let installs: Vec<Value> = done
             .iter()
             .map(|i| {
-                json!({
+                let mut value = json!({
                     "agent": i.agent.name,
                     "skill": step_json(&i.skill),
                     "rules": step_json(&i.rules),
-                })
+                });
+                if let Some(todo) = &i.todo {
+                    value["todo_skill"] = step_json(todo);
+                }
+                value
             })
             .collect();
         render::print_json(&json!({
@@ -312,6 +480,9 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
             println!("{}", installed.agent.display);
             println!("{}", step_line("skill", &installed.skill));
             println!("{}", step_line("rules", &installed.rules));
+            if let Some(todo) = &installed.todo {
+                println!("{}", step_line("todo", todo));
+            }
         }
         println!(
             "\nRun `son init` again at any time to add agents or bring these files up to date."
@@ -330,7 +501,8 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
         // this error goes to stderr and names what failed.
         let reasons: Vec<String> = done
             .iter()
-            .flat_map(|i| [&i.skill, &i.rules])
+            .flat_map(|i| [Some(&i.skill), Some(&i.rules), i.todo.as_ref()])
+            .flatten()
             .filter_map(|step| match step {
                 Step::Failed(path, reason) => Some(format!("{}: {reason}", short(path))),
                 _ => None,

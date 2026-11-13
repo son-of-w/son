@@ -67,6 +67,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
             TodoCommand::Add { .. } => ("todo add", true),
             TodoCommand::List { .. } => ("todo list", false),
             TodoCommand::Done { .. } => ("todo done", true),
+            TodoCommand::Backlog { .. } => ("todo backlog", false),
             TodoCommand::Reopen { .. } => ("todo reopen", true),
         },
         Command::Link { .. } => ("link", true),
@@ -248,6 +249,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             yes,
             skill_only,
             db_only,
+            todo_skill,
+            todo_skill_name,
+            overwrite_todo_skill,
             ..
         } => {
             if db_only {
@@ -276,6 +280,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                     yes,
                     skill_only,
                     json: app.json,
+                    todo_skill: todo_skill || todo_skill_name.is_some() || overwrite_todo_skill,
+                    todo_skill_name,
+                    overwrite_todo_skill,
                 },
             )
         }
@@ -303,6 +310,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 refs: &refs,
                 key: key.as_deref(),
                 priority: None,
+                parent: None,
+                number: None,
+                status: None,
             })
         }
         Command::Recall {
@@ -414,11 +424,17 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 evidence,
                 refs,
                 priority,
+                parent,
+                number,
+                status,
                 check: _,
                 key,
             } => {
                 let body = read_body(body)?;
                 app.remember(&Remember {
+                    parent: parent.as_deref(),
+                    number: number.as_deref(),
+                    status: status.as_deref(),
                     priority: priority.as_deref(),
                     kind: NodeType::Todo,
                     title: &title,
@@ -437,7 +453,8 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 tag,
                 done,
             } => app.todo_list(project.as_deref(), all, done, &tag),
-            TodoCommand::Done { id } => app.todo_done(&id),
+            TodoCommand::Done { id, note } => app.todo_done(&id, note.as_deref()),
+            TodoCommand::Backlog { collection } => app.todo_backlog(collection.as_deref()),
             TodoCommand::Reopen { id } => app.todo_reopen(&id),
         },
         Command::Link { from, relation, to } => app.link(&from, relation, &to, true),
@@ -610,6 +627,11 @@ fn parse_link(text: &str) -> Result<(&str, Relation)> {
 
 /// What `son remember` and `son todo add` were given.
 struct Remember<'a> {
+    /// For a todo, as typed: the parent todo, a number to use, and the
+    /// status to start with.
+    parent: Option<&'a str>,
+    number: Option<&'a str>,
+    status: Option<&'a str>,
     /// From `--priority`, as typed. Only a todo can have one.
     priority: Option<&'a str>,
     kind: NodeType,
@@ -671,6 +693,134 @@ impl App {
     /// Add to what the activity log will say about this command.
     fn note(&self, fill: impl FnOnce(&mut Draft)) {
         fill(&mut self.draft.borrow_mut());
+    }
+
+    /// The id of the node a person named: a todo number of the current
+    /// collection (`4.1`, `#4.1`), or an id as son prints it.
+    fn resolve(&self, input: &str) -> Result<String> {
+        if let Some(number) = store::parse_number(input) {
+            let name = project_name(None)?;
+            if let Some(project_id) = store::find_project(&self.conn, &name)? {
+                if let Some(id) = store::find_by_number(&self.conn, &project_id, &number)? {
+                    return Ok(id);
+                }
+            }
+            // Not a number in use here. It can still be the end of an id.
+            return store::resolve_id(&self.conn, input).map_err(|_| {
+                coded(
+                    "unknown_id",
+                    format!(
+                        "no todo has the number #{number} in collection '{name}', and no node has an id ending in '{}'",
+                        input.trim()
+                    ),
+                )
+            });
+        }
+        store::resolve_id(&self.conn, input)
+    }
+
+    /// The number for a new todo in the collection, and the id of its
+    /// parent when it is a child. `parent` is what was typed for
+    /// `--parent`; `wanted` is a number the caller asked for.
+    fn new_todo_number(
+        &self,
+        rec: &mut Recorder,
+        project_id: &str,
+        parent: Option<&str>,
+        wanted: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        let todo_in_collection = |id: &str| -> Result<Node> {
+            let node = store::get_node(&self.conn, id)?;
+            if node.kind != "todo" {
+                bail!(
+                    "`{}` is a {}; a parent must be a todo",
+                    node.short(),
+                    node.kind
+                );
+            }
+            if node.project_id.as_deref() != Some(project_id) {
+                bail!(
+                    "`{}` is in collection '{}'; a parent must be in the same collection",
+                    node.short(),
+                    node.project_name()
+                );
+            }
+            Ok(node)
+        };
+        let mut parent_node = match parent {
+            Some(text) => {
+                let id = match store::parse_number(text) {
+                    Some(number) => store::find_by_number(&self.conn, project_id, &number)?
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            store::resolve_id(&self.conn, text).map_err(|_| {
+                                coded(
+                                    "unknown_id",
+                                    format!("no todo has the number #{number} in this collection"),
+                                )
+                            })
+                        })?,
+                    None => store::resolve_id(&self.conn, text)?,
+                };
+                Some(todo_in_collection(&id)?)
+            }
+            None => None,
+        };
+        // A parent from before numbers gets one now, so the child can.
+        if let Some(node) = parent_node.as_mut().filter(|node| node.number.is_none()) {
+            rec.touch(&node.id)?;
+            let number = store::next_number(&self.conn, project_id, None)?;
+            store::set_number(&self.conn, &node.id, Some(&number))?;
+            node.number = Some(number);
+        }
+        let Some(wanted) = wanted else {
+            let under = parent_node.as_ref().and_then(|node| node.number.as_deref());
+            let number = store::next_number(&self.conn, project_id, under)?;
+            return Ok((number, parent_node.map(|node| node.id)));
+        };
+        // A number the caller chose: its first parts name the parent.
+        match (store::parent_number(wanted), &parent_node) {
+            (Some(above), Some(node)) if node.number.as_deref() != Some(above) => {
+                return Err(coded(
+                    "invalid_request",
+                    format!(
+                        "#{wanted} is a child of #{above}, but --parent names #{}",
+                        node.number.as_deref().unwrap_or("?")
+                    ),
+                ));
+            }
+            (None, Some(node)) => {
+                return Err(coded(
+                    "invalid_request",
+                    format!(
+                        "#{wanted} is a number of the top level; a child of #{} has a number such as {}.1",
+                        node.number.as_deref().unwrap_or("?"),
+                        node.number.as_deref().unwrap_or("?")
+                    ),
+                ));
+            }
+            (Some(above), None) => {
+                let id = store::find_by_number(&self.conn, project_id, above)?.ok_or_else(|| {
+                    coded(
+                        "invalid_request",
+                        format!("#{wanted} is a child of #{above}, and no todo here has the number #{above}; add that one first"),
+                    )
+                })?;
+                parent_node = Some(todo_in_collection(&id)?);
+            }
+            _ => {}
+        }
+        if let Some(holder) = store::find_by_number(&self.conn, project_id, wanted)? {
+            return Err(coded(
+                "invalid_request",
+                format!(
+                    "the number #{wanted} is already used in this collection, by `{}`",
+                    store::short_id(&holder)
+                ),
+            ));
+        }
+        store::note_number(&self.conn, project_id, wanted)?;
+        Ok((wanted.to_string(), parent_node.map(|node| node.id)))
     }
 
     /// Log the node a command acted on.
@@ -783,6 +933,27 @@ impl App {
             .map(store::parse_priority)
             .transpose()?
             .flatten();
+        let wanted_number = new
+            .number
+            .map(|text| {
+                store::parse_number(text).ok_or_else(|| {
+                    coded(
+                        "invalid_argument",
+                        format!("'{text}' is not a todo number; use a form such as 4 or 4.1"),
+                    )
+                })
+            })
+            .transpose()?;
+        let first_status = match new.status.map(|s| s.trim().to_lowercase()) {
+            Some(status) if TODO_STATUSES.contains(&status.as_str()) => status,
+            Some(_) => {
+                return Err(coded(
+                    "invalid_argument",
+                    format!("a todo's status is one of: {}", TODO_STATUSES.join(", ")),
+                ))
+            }
+            None => "open".to_string(),
+        };
         let refs = parse_refs(new.refs)?;
         let key = new.key.map(str::trim);
         if key.is_some_and(|key| key.is_empty() || key.chars().count() > 200) {
@@ -813,6 +984,15 @@ impl App {
         // same as one that was stored before priorities were known.
         if let Some(priority) = &priority {
             request["priority"] = json!(priority);
+        }
+        if let Some(parent) = new.parent {
+            request["parent"] = json!(parent.trim());
+        }
+        if let Some(number) = &wanted_number {
+            request["number"] = json!(number);
+        }
+        if new.status.is_some() {
+            request["status"] = json!(first_status);
         }
         let request = request.to_string();
         let saved = store::write(&self.conn, || {
@@ -853,6 +1033,7 @@ impl App {
                 ],
             )?;
             let mut rec = Recorder::new(&self.conn, "create");
+            let mut parent_id: Option<String> = None;
             let id = if kind == NodeType::Collection {
                 if project.is_some() {
                     bail!("a collection cannot be inside another collection");
@@ -873,6 +1054,7 @@ impl App {
                     evidence,
                     refs: &refs,
                     priority: None,
+                    number: None,
                 })?
             } else {
                 let project_id = history::ensure_collection(
@@ -881,22 +1063,38 @@ impl App {
                     &self.meta,
                     &project_name(project)?,
                 )?;
+                let number = if kind == NodeType::Todo {
+                    let (number, parent) = self.new_todo_number(
+                        &mut rec,
+                        &project_id,
+                        new.parent,
+                        wanted_number.as_deref(),
+                    )?;
+                    parent_id = parent;
+                    Some(number)
+                } else {
+                    None
+                };
                 self.insert(&NewNode {
                     kind: kind.as_str(),
                     title,
                     body,
-                    status: (kind == NodeType::Todo).then_some("open"),
+                    status: (kind == NodeType::Todo).then_some(first_status.as_str()),
                     project_id: Some(&project_id),
                     tags,
                     evidence,
                     refs: &refs,
                     priority: priority.as_deref(),
+                    number: number.as_deref(),
                 })?
             };
             rec.created(&id);
+            if let Some(parent) = &parent_id {
+                rec.link(&id, "belongs_to", parent)?;
+            }
             for link in links {
                 let (target, relation) = parse_link(link)?;
-                let to = store::resolve_id(&self.conn, target)?;
+                let to = self.resolve(target)?;
                 rec.link(&id, relation.as_str(), &to)?;
             }
             rec.finish(&self.meta)?;
@@ -956,7 +1154,7 @@ impl App {
     }
 
     fn verify(&self, id: &str, checked: Option<&str>, refs: &[String], clear: bool) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let added = parse_refs(refs)?;
         let checked = checked.map(str::trim).unwrap_or("");
         if !clear && checked.is_empty() {
@@ -1025,7 +1223,17 @@ impl App {
         if project.is_some() && found.is_none() {
             return Err(no_collection(&name));
         }
-        let result = search::recall_tagged(
+        // A todo number as the whole query finds that todo: `son recall 4.1`.
+        let numbered = match (store::parse_number(terms), &found) {
+            (Some(number), Some(collection)) => {
+                store::find_by_number(&self.conn, collection, &number)?
+                    .map(|id| store::get_node(&self.conn, &id))
+                    .transpose()?
+                    .filter(|node| node.deleted_at.is_none() && store::has_tags(node, tags))
+            }
+            _ => None,
+        };
+        let searched = search::recall_tagged(
             &self.conn,
             &self.an,
             terms,
@@ -1041,7 +1249,39 @@ impl App {
                 hops,
             },
             tags,
-        )?;
+        );
+        let result = match (searched, numbered) {
+            (searched, None) => searched?,
+            (searched, Some(node)) => {
+                // First in the answer, whatever else the words found.
+                let mut result = searched.unwrap_or(search::Recall {
+                    hits: Vec::new(),
+                    neighbors: Vec::new(),
+                    also: Vec::new(),
+                });
+                result.hits.retain(|hit| hit.node.id != node.id);
+                result.neighbors.retain(|near| near.node.id != node.id);
+                result.also.retain(|other| other.id != node.id);
+                result.hits.insert(
+                    0,
+                    search::Hit {
+                        node,
+                        score: 0.0,
+                        current: true,
+                        close: false,
+                        superseded_by: None,
+                        why: search::Why {
+                            factors: vec![search::Factor {
+                                name: "the query is this todo's number",
+                                times: 1.0,
+                            }],
+                            ..search::Why::default()
+                        },
+                    },
+                );
+                result
+            }
+        };
         self.note(|draft| {
             draft.results = Some(result.hits.len() as i64);
             draft.close = Some(result.hits.iter().filter(|hit| hit.close).count() as i64);
@@ -1054,7 +1294,7 @@ impl App {
     }
 
     fn show(&self, id: &str) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         let edges = store::edges_of(&self.conn, &id)?;
@@ -1094,6 +1334,8 @@ impl App {
                  --evidence, --ref, --unref or --priority"
             );
         }
+        // A todo that got another number because it moved: (old, new).
+        let renumbered: std::cell::Cell<Option<(String, String)>> = std::cell::Cell::new(None);
         let (refs, unref) = (parse_refs(&refs)?, parse_refs(&unref)?);
         let ref_text = ref_values(&refs);
         let tag_text = tags.as_deref().unwrap_or_default().join(" ");
@@ -1106,7 +1348,7 @@ impl App {
                 ("evidence reference", ref_text.as_str()),
             ],
         )?;
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let changed = store::write(&self.conn, || {
             let mut rec = Recorder::new(&self.conn, "edit");
             rec.touch(&id)?;
@@ -1180,6 +1422,35 @@ impl App {
                     &self.conn, &self.an, &self.meta, &name,
                 )?);
             }
+            // The number of a todo counts in its collection.
+            match (node.kind.as_str(), node.project_id.clone()) {
+                ("todo", Some(collection)) => {
+                    let moved = node.project_id != original.project_id;
+                    let old = node.number.clone().filter(|_| original.kind == "todo");
+                    let free = |number: &str| -> Result<bool> {
+                        Ok(store::parent_number(number).is_none()
+                            && store::find_by_number(&self.conn, &collection, number)?.is_none())
+                    };
+                    match old {
+                        // It stays where it is: nothing to do.
+                        Some(_) if !moved => {}
+                        // It arrives with a number that is free here.
+                        Some(number) if free(&number)? => {
+                            store::note_number(&self.conn, &collection, &number)?;
+                        }
+                        // It arrives as a child, or its number is used
+                        // here; or it had none: the next free one.
+                        old => {
+                            let new = store::next_number(&self.conn, &collection, None)?;
+                            if let Some(old) = old {
+                                renumbered.set(Some((old, new.clone())));
+                            }
+                            node.number = Some(new);
+                        }
+                    }
+                }
+                _ => node.number = None,
+            }
             if let Some(tags) = tags {
                 node.tags = tags;
             }
@@ -1211,16 +1482,31 @@ impl App {
         })?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
-        render::saved(
-            if changed { "updated" } else { "unchanged" },
-            &node,
-            self.json,
-        );
+        match renumbered.take().filter(|_| changed) {
+            Some((old, new)) if self.json => {
+                let mut value = render::node_json(&node);
+                value["renumbered_from"] = json!(old);
+                let _ = new;
+                render::print_json(&value);
+            }
+            Some((old, new)) => {
+                render::saved("updated", &node, false);
+                println!(
+                    "The todo number changed from #{old} to #{new}: a number counts in one collection, and the todo arrived in '{}'.",
+                    node.project_name()
+                );
+            }
+            None => render::saved(
+                if changed { "updated" } else { "unchanged" },
+                &node,
+                self.json,
+            ),
+        }
         Ok(())
     }
 
     fn drop_node(&self, id: &str, purge: bool) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         store::write(&self.conn, || {
@@ -1271,7 +1557,7 @@ impl App {
     }
 
     fn restore(&self, id: &str) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         if node.deleted_at.is_none() {
@@ -1293,7 +1579,7 @@ impl App {
     }
 
     fn stale(&self, id: &str, reason: Option<&str>, clear: bool) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         let reason = reason.map(str::trim).unwrap_or("");
@@ -1403,8 +1689,8 @@ impl App {
         title: Option<String>,
         cross_collection: bool,
     ) -> Result<()> {
-        let source_id = store::resolve_id(&self.conn, source)?;
-        let survivor_id = store::resolve_id(&self.conn, survivor)?;
+        let source_id = self.resolve(source)?;
+        let survivor_id = self.resolve(survivor)?;
         if source_id == survivor_id {
             bail!("a node cannot be merged into itself");
         }
@@ -1536,7 +1822,7 @@ impl App {
     }
 
     fn history(&self, id: &str, op: Option<i64>, limit: usize, page: usize) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         if let Some(op) = op {
@@ -1555,7 +1841,7 @@ impl App {
     }
 
     fn undo(&self, id: &str, op: Option<i64>) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         self.note_node(&store::get_node(&self.conn, &id)?);
         let undone = store::write(&self.conn, || {
             history::undo(&self.conn, &self.an, &self.meta, &id, op)
@@ -1626,17 +1912,51 @@ impl App {
         Ok(())
     }
 
-    fn todo_done(&self, id: &str) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+    fn todo_done(&self, id: &str, note: Option<&str>) -> Result<()> {
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         if node.kind != "todo" {
             bail!("`{}` is a {}, not a todo", node.short(), node.kind);
         }
-        if node.status.as_deref() != Some("done") {
+        let note = note.map(str::trim).filter(|note| !note.is_empty());
+        secrets::refuse(
+            self.allow_secret,
+            [("--note text", note.unwrap_or_default())],
+        )?;
+        let open = store::open_children(&self.conn, &node)?;
+        if !open.is_empty() {
+            let list: Vec<String> = open
+                .iter()
+                .map(|child| format!("  {}", render::line(child)))
+                .collect();
+            return Err(coded(
+                "invalid_request",
+                format!(
+                    "`{}` has {} open child todo(s); finish or drop them first:\n{}",
+                    node.short(),
+                    open.len(),
+                    list.join("\n")
+                ),
+            ));
+        }
+        if node.status.as_deref() != Some("done") || note.is_some() {
             store::write(&self.conn, || {
                 let mut rec = Recorder::new(&self.conn, "done");
                 rec.touch(&id)?;
+                if let Some(note) = note {
+                    // What shows that it is done stays with the todo.
+                    let today: String = self
+                        .conn
+                        .query_row("SELECT date('now')", [], |r| r.get(0))?;
+                    let mut done = store::get_node(&self.conn, &id)?;
+                    let body = done.body.trim_end();
+                    done.body = format!(
+                        "{body}{}Completed {today}: {note}",
+                        if body.is_empty() { "" } else { "\n\n" }
+                    );
+                    store::update_node(&self.conn, &self.an, &done)?;
+                }
                 store::set_status(&self.conn, &id, "done")?;
                 rec.finish(&self.meta)?;
                 Ok(())
@@ -1646,8 +1966,27 @@ impl App {
         Ok(())
     }
 
+    fn todo_backlog(&self, project: Option<&str>) -> Result<()> {
+        let name = project_name(project)?;
+        let found = store::find_project(&self.conn, &name)?;
+        if project.is_some() && found.is_none() {
+            return Err(no_collection(&name));
+        }
+        let mut todos = match &found {
+            Some(id) => store::list_nodes(&self.conn, Some(id), Some("todo"), false)?,
+            None => Vec::new(),
+        };
+        todos.retain(|t| t.status.as_deref() == Some("open"));
+        self.note(|draft| {
+            draft.project = Some(name.clone());
+            draft.results = Some(todos.len() as i64);
+        });
+        render::backlog(&todos, &name, self.json);
+        Ok(())
+    }
+
     fn todo_reopen(&self, id: &str) -> Result<()> {
-        let id = store::resolve_id(&self.conn, id)?;
+        let id = self.resolve(id)?;
         let node = store::get_node(&self.conn, &id)?;
         self.note_node(&node);
         if node.kind != "todo" {
@@ -1674,8 +2013,8 @@ impl App {
     }
 
     fn link(&self, from: &str, relation: Relation, to: &str, add: bool) -> Result<()> {
-        let from = store::resolve_id(&self.conn, from)?;
-        let to = store::resolve_id(&self.conn, to)?;
+        let from = self.resolve(from)?;
+        let to = self.resolve(to)?;
         let changed = store::write(&self.conn, || {
             let mut rec = Recorder::new(&self.conn, if add { "link" } else { "unlink" });
             let changed = if add {
@@ -1881,6 +2220,15 @@ impl App {
                 "imported: {} added, {} updated, {} unchanged, {} collections merged by name, {} links, {} synonyms, {} with a stale mark or verification changed",
                 stats.added, stats.updated, stats.unchanged, stats.merged_collections, stats.edges, stats.synonyms, stats.freshness
             );
+            for change in &stats.renumbered {
+                println!(
+                    "todo `{}` ({}) has the number #{} here; #{} was in use in its collection",
+                    store::short_id(&change.id),
+                    change.title,
+                    change.to,
+                    change.from
+                );
+            }
         }
         Ok(())
     }

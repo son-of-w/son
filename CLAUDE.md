@@ -39,6 +39,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage. 
 - `src/seed.rs` — `son seed`: list the user's own instruction and note files for an agent to bring in
 - `src/uninstall.rs` — `son uninstall`: remove the skill files and the instruction blocks
 - `src/instructions.rs` — the skill file and the instruction block, and how they are written
+- `src/todo_skill.md` — the text of the todo skill that `son init --todo-skill` installs
 - `src/transfer.rs` — JSON export and import
 - `src/backup.rs` — `son backup`, and restoring a backup through `son import`
 - `src/doctor.rs` — `son doctor`: read-only checks of the database and the agent setup
