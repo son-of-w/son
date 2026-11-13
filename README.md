@@ -14,6 +14,7 @@
   <a href="https://github.com/son-of-w/son/actions/workflows/ci.yml"><img src="https://github.com/son-of-w/son/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-000000" alt="macOS, Linux and Windows">
   <img src="https://img.shields.io/badge/built%20with-Rust-000000" alt="Built with Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-000000" alt="MIT license"></a>
 </p>
 
 <p align="center">
@@ -71,6 +72,7 @@ You do not type these commands. Your agents do. `son init` tells them when to re
 | **Nothing is lost** | Deletes are soft. Every change is in the history, and every change can be undone. |
 | **It stays clean** | Duplicates are found before they are saved. Old knowledge comes back for a check; it is never thrown away silently. |
 | **Yours** | One SQLite file at `~/.son-of-w/son.db`. Back it up, export it, read it with any SQLite tool. |
+| **Free and open** | MIT. The binary never needs an account, and nothing in it will be moved to a paid tier. |
 
 ## Quick start
 
@@ -351,3 +353,12 @@ make publish
 It runs the checks, builds the binaries from the tagged commit, creates and pushes the tag `v<version>` if it is missing, stops any Release workflow run for that tag, and publishes the release with the GitHub CLI (`gh`). It is safe to run again. `make dist` only builds the archives into `dist/`. Both use [scripts/release.sh](scripts/release.sh), the same script the workflow runs.
 
 A local release holds only the binaries your machine can build. A Mac builds both Mac binaries. It can also build the Linux binaries if [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) is installed and you run `SON_TARGETS=all make publish`. The Windows binary can only be built on Windows.
+
+## License
+
+`son` is free and open source under the [MIT license](LICENSE). Copyright © 2026 Xon Designs LLC.
+
+Two rules hold for this binary:
+
+1. Nothing is ever moved from the free binary to a paid tier.
+2. The binary never needs an account, and never calls the network unless you add a remote. (Version 1 has no network code at all.)

@@ -4,6 +4,7 @@ version = "0.1.14"
 edition = "2021"
 description = "Local second brain for Claude sessions"
 repository = "https://github.com/son-of-w/son"
+license = "MIT"
 
 [[bin]]
 name = "son"
