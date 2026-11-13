@@ -1,0 +1,64 @@
+name: Test signing
+
+# Run by hand (Actions, Test signing, Run workflow; or
+# `gh workflow run "Test signing"`). It builds both Mac binaries from the
+# chosen branch, signs them and has Apple notarize them, exactly as the
+# Release workflow does, and then checks the result. It publishes nothing:
+# no tag, no release, no upload.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sign:
+    name: Sign and notarize the Mac binaries
+    runs-on: macos-latest
+    env:
+      TARGETS: aarch64-apple-darwin x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add $TARGETS
+
+      - name: Set up signing
+        uses: ./.github/actions/mac-signing
+        with:
+          cert-p12: ${{ secrets.MACOS_CERT_P12 }}
+          cert-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+          notary-key-p8: ${{ secrets.NOTARY_KEY_P8 }}
+
+      - name: Build, sign, notarize and package
+        env:
+          SON_TARGETS: ${{ env.TARGETS }}
+          SON_REQUIRE_SIGNING: "true"
+          SON_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          SON_NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: bash scripts/release.sh package
+
+      # Check the binaries as a user gets them: out of the archives.
+      - name: Check the packaged binaries
+        run: |
+          for target in $TARGETS; do
+            dir="$RUNNER_TEMP/check-$target"
+            mkdir -p "$dir"
+            tar -xzf dist/son-v*-"$target".tar.gz -C "$dir"
+            echo "== $target"
+            codesign --verify --strict "$dir/son"
+            codesign -dv --verbose=2 "$dir/son" 2>&1 | grep -E 'Authority=Developer ID Application|TeamIdentifier|Timestamp'
+            # Gatekeeper's own answer; it must name a notarized Developer ID.
+            spctl -a -vv -t install "$dir/son" 2>&1 | tee "$dir/spctl.txt"
+            grep -q 'source=Notarized Developer ID' "$dir/spctl.txt"
+          done
+          # The runner is Apple silicon: run that binary too.
+          "$RUNNER_TEMP/check-aarch64-apple-darwin/son" --version
