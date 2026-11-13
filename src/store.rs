@@ -11,6 +11,34 @@ use std::collections::HashMap;
 /// same second still sort in the order they happened.
 pub const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 pub const TODO_STATUSES: [&str; 3] = ["open", "done", "dropped"];
+/// The priorities a todo can have, most urgent first.
+pub const PRIORITIES: [&str; 5] = ["p0", "p1", "p2", "p3", "p4"];
+
+/// A priority from the command line: `p0` to `p4`, or `none` to take it
+/// away. The outer `Option` is the stored value.
+pub fn parse_priority(text: &str) -> Result<Option<String>> {
+    let text = text.trim().to_lowercase();
+    if text == "none" {
+        return Ok(None);
+    }
+    if PRIORITIES.contains(&text.as_str()) {
+        return Ok(Some(text));
+    }
+    Err(coded(
+        "invalid_argument",
+        format!(
+            "'{text}' is not a priority; use one of: {}, or none",
+            PRIORITIES.join(", ")
+        ),
+    ))
+}
+
+/// The order of todos in a list: by priority, a todo with none after
+/// `p4`, then oldest first (an id sorts by the time it was made).
+pub fn todo_order(a: &Node, b: &Node) -> std::cmp::Ordering {
+    let rank = |node: &Node| node.priority.clone().unwrap_or_else(|| "p9".to_string());
+    (rank(a), &a.id).cmp(&(rank(b), &b.id))
+}
 pub const RELATIONS: [&str; 5] = [
     "belongs_to",
     "relates_to",
@@ -27,9 +55,9 @@ pub const COLS: &str = "n.id, n.type, n.title, n.body, n.status, n.project_id, p
     n.evidence, n.verified_at, n.verified_by, n.verified_note, \
     (SELECT json_group_array(json_object('kind', kind, 'value', value)) \
        FROM (SELECT kind, value FROM refs WHERE node_id = n.id ORDER BY kind, value)), \
-    n.merged_into, n.stale_at, n.stale_note";
+    n.merged_into, n.stale_at, n.stale_note, n.priority";
 /// Number of columns in [`COLS`]; extra columns in a query start here.
-pub const NCOLS: usize = 24;
+pub const NCOLS: usize = 25;
 
 /// How a piece of knowledge was learned. This says where it came from, not
 /// that it is true. A node with none of these has unknown provenance.
@@ -147,6 +175,10 @@ pub struct Node {
     /// Why it was marked.
     #[serde(default)]
     pub stale_note: Option<String>,
+    /// For a todo: `p0` (most urgent) to `p4`, or `None` when none was
+    /// given.
+    #[serde(default)]
+    pub priority: Option<String>,
 }
 
 impl Node {
@@ -209,6 +241,7 @@ pub fn node_from_row(row: &Row) -> rusqlite::Result<Node> {
         merged_into: row.get(21)?,
         stale_at: row.get(22)?,
         stale_note: row.get(23)?,
+        priority: row.get(24)?,
     })
 }
 
@@ -240,6 +273,7 @@ pub struct NewNode<'a> {
     pub tags: &'a [String],
     pub evidence: Option<&'a str>,
     pub refs: &'a [Ref],
+    pub priority: Option<&'a str>,
 }
 
 /// Run `f` inside one write transaction. The lock is taken at the start, so
@@ -326,7 +360,7 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
              evidence = ?7, verified_at = ?8, verified_by = ?9, verified_note = ?10, \
              deleted_at = ?11, merged_into = ?12, stale_at = ?13, stale_note = ?14, \
-             updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             priority = ?15, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -342,7 +376,8 @@ pub fn put_snapshot(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()>
             node.deleted_at,
             node.merged_into,
             node.stale_at,
-            node.stale_note
+            node.stale_note,
+            node.priority
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;
@@ -401,6 +436,7 @@ pub fn ensure_project(conn: &Connection, an: &Analyzer, meta: &Meta, name: &str)
             tags: &[],
             evidence: None,
             refs: &[],
+            priority: None,
         },
     )
 }
@@ -409,8 +445,8 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
     let id = ulid::Ulid::generate().to_string();
     conn.execute(
         &format!(
-            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author, evidence) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8, ?9)"
+            "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, source, author, evidence, priority) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, {NOW}, {NOW}, ?7, ?8, ?9, ?10)"
         ),
         params![
             id,
@@ -421,7 +457,8 @@ pub fn insert_node(conn: &Connection, an: &Analyzer, meta: &Meta, new: &NewNode)
             new.project_id,
             meta.source,
             meta.author,
-            new.evidence
+            new.evidence,
+            new.priority
         ],
     )?;
     set_tags(conn, &id, new.tags)?;
@@ -436,7 +473,7 @@ pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> 
     conn.execute(
         &format!(
             "UPDATE nodes SET type = ?2, title = ?3, body = ?4, status = ?5, project_id = ?6, \
-             evidence = ?7, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
+             evidence = ?7, priority = ?8, updated_at = {NOW}, rev = rev + 1 WHERE id = ?1"
         ),
         params![
             node.id,
@@ -445,7 +482,8 @@ pub fn update_node(conn: &Connection, an: &Analyzer, node: &Node) -> Result<()> 
             node.body,
             node.status,
             node.project_id,
-            node.evidence
+            node.evidence,
+            node.priority
         ],
     )?;
     set_tags(conn, &node.id, &node.tags)?;

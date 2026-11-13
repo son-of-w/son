@@ -21,7 +21,7 @@ const BODY: &str = r#"## Shared memory: `son`
 - In a repository the current collection is the repository. For work that is not in a repository, name the collection: `--collection household`, or set `SON_COLLECTION`.
 - When a decision is made, a way of configuring something is settled, or a todo is created or finished, record it at once:
   - `son remember <decision|pattern|fact|note> "<title>" --body "<text>" --tag a,b`
-  - `son todo add "<title>"` and `son todo done <id>`
+  - `son todo add "<title>" --priority p1` (p0 is most urgent, p4 least) and `son todo done <id>`
 - Use `pattern` for anything that answers "how do we normally set this up".
 - When the user says "remember this" or "I need to do this", save it with `son`.
 - Say how you learned it: add `--evidence user-statement` (the user said it), `observation` (you saw it) or `inference` (you concluded it), and `--ref file:<path>`, `--ref url:<address>` or `--ref user:"<what they said>"` for where the evidence is. After you check a stored node against its evidence, run `son verify <id> --checked "<what you checked>"`. Reading or repeating a node is not a check.
@@ -77,7 +77,8 @@ Record at once, do not wait for the end of the session:
 - A way of setting something up is settled: `son remember pattern "<title>" --body "<how>" --tag a,b`
 - A stable fact is learned: `son remember fact "<title>" --body "<value>"`
 - Anything else worth keeping: `son remember note "<title>" --body "<text>"`
-- A todo appears: `son todo add "<title>"`. It is finished: `son todo done <id>`.
+- A todo appears: `son todo add "<title>"`. Add `--priority p0` to `p4` when you know how urgent it is (p0 is most urgent); the list shows the most urgent first. It is finished: `son todo done <id>`. It is not finished after all: `son todo reopen <id>`.
+- A todo is a node like the others: change its title, body or priority with `son edit <id>` (`--priority p2`, or `--priority none`), and remove it with `son drop <id>`.
 - The user says "remember this" or "I need to do this": save it with `son`.
 
 Use `pattern` for anything that answers "how do we normally set this up". For a long body, pipe it in: `--body -` reads stdin.

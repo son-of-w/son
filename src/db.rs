@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The schema version this son reads and writes.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -204,6 +204,12 @@ CREATE INDEX idempotency_node ON idempotency(node_id);
 const SCHEMA_V9: &str = "
 ALTER TABLE nodes ADD COLUMN stale_at TEXT;
 ALTER TABLE nodes ADD COLUMN stale_note TEXT;
+";
+
+/// Version 10: a todo can have a priority, `p0` (most urgent) to `p4`.
+/// NULL means none was given; every older todo has none.
+const SCHEMA_V10: &str = "
+ALTER TABLE nodes ADD COLUMN priority TEXT;
 ";
 
 /// `SON_DB` if set, else `.son-of-w/son.db` in the home directory.
@@ -614,6 +620,9 @@ fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
         }
         if version < 9 {
             conn.execute_batch(SCHEMA_V9)?;
+        }
+        if version < 10 {
+            conn.execute_batch(SCHEMA_V10)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

@@ -64,6 +64,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
             TodoCommand::Add { .. } => ("todo add", true),
             TodoCommand::List { .. } => ("todo list", false),
             TodoCommand::Done { .. } => ("todo done", true),
+            TodoCommand::Reopen { .. } => ("todo reopen", true),
         },
         Command::Link { .. } => ("link", true),
         Command::Unlink { .. } => ("unlink", true),
@@ -260,6 +261,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 evidence,
                 refs: &refs,
                 key: key.as_deref(),
+                priority: None,
             })
         }
         Command::Recall {
@@ -290,11 +292,13 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             evidence,
             refs,
             unref,
+            priority,
         } => {
             let body = body.map(|b| read_body(Some(b))).transpose()?;
             app.edit(
                 &id,
                 Edit {
+                    priority,
                     title,
                     body,
                     kind,
@@ -362,11 +366,13 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 tag,
                 evidence,
                 refs,
+                priority,
                 check: _,
                 key,
             } => {
                 let body = read_body(body)?;
                 app.remember(&Remember {
+                    priority: priority.as_deref(),
                     kind: NodeType::Todo,
                     title: &title,
                     body: &body,
@@ -384,6 +390,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 done,
             } => app.todo_list(project.as_deref(), all, done),
             TodoCommand::Done { id } => app.todo_done(&id),
+            TodoCommand::Reopen { id } => app.todo_reopen(&id),
         },
         Command::Link { from, relation, to } => app.link(&from, relation, &to, true),
         Command::Unlink { from, relation, to } => app.link(&from, relation, &to, false),
@@ -544,6 +551,8 @@ fn parse_link(text: &str) -> Result<(&str, Relation)> {
 
 /// What `son remember` and `son todo add` were given.
 struct Remember<'a> {
+    /// From `--priority`, as typed. Only a todo can have one.
+    priority: Option<&'a str>,
     kind: NodeType,
     title: &'a str,
     body: &'a str,
@@ -558,6 +567,8 @@ struct Remember<'a> {
 
 /// What `son edit` was asked to change.
 struct Edit {
+    /// From `--priority`, as typed: `p0` to `p4`, or `none`.
+    priority: Option<String>,
     title: Option<String>,
     body: Option<String>,
     kind: Option<NodeType>,
@@ -687,6 +698,11 @@ impl App {
             bail!("the title is empty");
         }
         let evidence = new.evidence.and_then(Evidence::stored);
+        let priority = new
+            .priority
+            .map(store::parse_priority)
+            .transpose()?
+            .flatten();
         let refs = parse_refs(new.refs)?;
         let key = new.key.map(str::trim);
         if key.is_some_and(|key| key.is_empty() || key.chars().count() > 200) {
@@ -702,7 +718,7 @@ impl App {
         let mut request_refs = refs.clone();
         request_refs.sort();
         request_refs.dedup();
-        let request = json!({
+        let mut request = json!({
             "command": "remember",
             "type": kind.as_str(),
             "title": title,
@@ -712,8 +728,13 @@ impl App {
             "links": links,
             "evidence": evidence,
             "refs": request_refs,
-        })
-        .to_string();
+        });
+        // Only when one is given: a request with no priority must read the
+        // same as one that was stored before priorities were known.
+        if let Some(priority) = &priority {
+            request["priority"] = json!(priority);
+        }
+        let request = request.to_string();
         let saved = store::write(&self.conn, || {
             if let Some(key) = key {
                 let earlier: Option<(String, String)> = self
@@ -771,6 +792,7 @@ impl App {
                     tags,
                     evidence,
                     refs: &refs,
+                    priority: None,
                 })?
             } else {
                 let project_id = history::ensure_collection(
@@ -788,6 +810,7 @@ impl App {
                     tags,
                     evidence,
                     refs: &refs,
+                    priority: priority.as_deref(),
                 })?
             };
             rec.created(&id);
@@ -958,6 +981,7 @@ impl App {
 
     fn edit(&self, id: &str, edit: Edit) -> Result<()> {
         let Edit {
+            priority,
             title,
             body,
             kind,
@@ -968,7 +992,9 @@ impl App {
             refs,
             unref,
         } = edit;
+        let priority = priority.as_deref().map(store::parse_priority).transpose()?;
         if title.is_none()
+            && priority.is_none()
             && body.is_none()
             && kind.is_none()
             && status.is_none()
@@ -980,7 +1006,7 @@ impl App {
         {
             bail!(
                 "nothing to change; give --title, --body, --type, --status, --collection, --tag, \
-                 --evidence, --ref or --unref"
+                 --evidence, --ref, --unref or --priority"
             );
         }
         let (refs, unref) = (parse_refs(&refs)?, parse_refs(&unref)?);
@@ -1042,6 +1068,23 @@ impl App {
                 if !TODO_STATUSES.contains(&status) {
                     bail!("a todo's status is one of: {}", TODO_STATUSES.join(", "));
                 }
+            }
+            if let Some(priority) = priority {
+                if node.kind != "todo" && priority.is_some() {
+                    return Err(coded(
+                        "invalid_request",
+                        format!(
+                            "`{}` is a {}; only a todo has a priority",
+                            node.short(),
+                            node.kind
+                        ),
+                    ));
+                }
+                node.priority = priority;
+            }
+            if node.kind != "todo" {
+                // A todo that became another type keeps no priority.
+                node.priority = None;
             }
             if let Some(project) = project {
                 if is_project {
@@ -1478,8 +1521,8 @@ impl App {
         if !done {
             todos.retain(|t| t.status.as_deref() == Some("open"));
         }
-        // Oldest first: a todo list reads top down.
-        todos.sort_by(|a, b| a.id.cmp(&b.id));
+        // The most urgent first, then the oldest: a todo list reads top down.
+        todos.sort_by(store::todo_order);
         self.note(|draft| {
             draft.project = project_id.is_some().then(|| scope.clone());
             draft.results = Some(todos.len() as i64);
@@ -1505,6 +1548,33 @@ impl App {
             })?;
         }
         render::saved("done", &store::get_node(&self.conn, &id)?, self.json);
+        Ok(())
+    }
+
+    fn todo_reopen(&self, id: &str) -> Result<()> {
+        let id = store::resolve_id(&self.conn, id)?;
+        let node = store::get_node(&self.conn, &id)?;
+        self.note_node(&node);
+        if node.kind != "todo" {
+            bail!("`{}` is a {}, not a todo", node.short(), node.kind);
+        }
+        if node.deleted_at.is_some() {
+            bail!(
+                "`{}` was removed with `son drop`; bring it back with `son restore {}`",
+                node.short(),
+                node.short()
+            );
+        }
+        if node.status.as_deref() != Some("open") {
+            store::write(&self.conn, || {
+                let mut rec = Recorder::new(&self.conn, "reopen");
+                rec.touch(&id)?;
+                store::set_status(&self.conn, &id, "open")?;
+                rec.finish(&self.meta)?;
+                Ok(())
+            })?;
+        }
+        render::saved("reopened", &store::get_node(&self.conn, &id)?, self.json);
         Ok(())
     }
 
@@ -1722,7 +1792,7 @@ impl App {
         }
         let mut todos = of_kind("todo", usize::MAX)?;
         todos.retain(|t| t.status.as_deref() == Some("open"));
-        todos.sort_by(|a, b| a.id.cmp(&b.id));
+        todos.sort_by(store::todo_order);
 
         let text = render::context(
             &ProjectContext {

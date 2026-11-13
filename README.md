@@ -215,6 +215,12 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 - **`.son` is the settings file for a folder.** It holds `key = value` lines, with `#` for comments; `collection` is its only key now.
 - **Collections organize; they do not restrict.** Every agent that uses the database can read every collection. A collection is not a security boundary.
 
+### Todos
+
+- **A todo is a node with a status**: `open`, `done` or `dropped`. `son todo done <id>` finishes it, and `son todo reopen <id>` opens it again; both are in the history and can be undone. Everything else is the same as for other nodes: `son edit <id>` changes it and `son drop <id>` removes it.
+- **A todo can have a priority**, `p0` (most urgent) to `p4`: `son todo add "<title>" --priority p1`, and `son edit <id> --priority p2` to change it or `--priority none` to take it away. A priority is not required. Only a todo can have one.
+- **The most urgent comes first.** `son todo list` and the open todos of `son context` are in priority order, a todo with no priority after `p4`, and the oldest first inside one priority. `son context` shows at most ten open todos, so these are the ten most urgent. `son review` does not look at priority: it lists a todo that is open for a long time, whatever its priority.
+
 ### Recall
 
 - **Recall searches every collection.** Matches from the current collection come first; matches from other collections follow. `--collection <name>` keeps only one. This is how memory crosses sessions and subjects.
@@ -268,7 +274,7 @@ son recall <terms...> [--type <type>] [--collection <name>] [--limit 5] [--hops 
                       [--max-chars <number>] [--explain]
 son context [--collection <name>] [--max-chars <number>]   what a collection holds, for the start of a session
 son show <id>
-son edit <id> [--title] [--body] [--type] [--status] [--collection] [--tag] [--evidence] [--ref] [--unref]
+son edit <id> [--title] [--body] [--type] [--status] [--priority] [--collection] [--tag] [--evidence] [--ref] [--unref]
 son verify <id> --checked "<what was checked>" [--ref <kind>:<value>] | --clear
 son stale <id> --reason "<why>" | --clear
 son review [--collection <name>] [--type <type>] [--fact-days 90] [--decision-days 180] [--todo-days 30]
@@ -278,9 +284,10 @@ son drop <id> [--purge]
 son restore <id>
 son history <id> [--op <number>] [--limit 20] [--page 1]
 son undo <id> [--op <number>]
-son todo add "<title>" [--collection <name>] [--tag a,b]
+son todo add "<title>" [--priority p0..p4] [--collection <name>] [--tag a,b]
 son todo list [--collection <name>] [--all] [--done]
 son todo done <id>
+son todo reopen <id>                       open a done or dropped todo again
 son link <from> <relation> <to>
 son unlink <from> <relation> <to>
 son collections

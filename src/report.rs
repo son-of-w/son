@@ -205,6 +205,13 @@ fn changes(before: Option<&Node>, after: &Node) -> Vec<String> {
             after.refs.len()
         ));
     }
+    if before.priority != after.priority {
+        parts.push(format!(
+            "priority {} → {}",
+            before.priority.as_deref().unwrap_or("none"),
+            after.priority.as_deref().unwrap_or("none")
+        ));
+    }
     if before.stale_at != after.stale_at {
         parts.push(match &after.stale_at {
             Some(_) => format!(

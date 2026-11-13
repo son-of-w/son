@@ -229,6 +229,10 @@ pub enum Command {
         /// Remove a reference to evidence: <kind>:<value> (may repeat)
         #[arg(long, value_name = "KIND:VALUE")]
         unref: Vec<String>,
+        /// For a todo: its priority, p0 (most urgent) to p4, or "none" to
+        /// take it away
+        #[arg(long, value_name = "P0-P4")]
+        priority: Option<String>,
     },
     /// Record that you checked a node against its evidence
     ///
@@ -479,6 +483,10 @@ pub enum TodoCommand {
         /// Where the evidence is: <kind>:<value> (may repeat)
         #[arg(long = "ref", value_name = "KIND:VALUE")]
         refs: Vec<String>,
+        /// How urgent it is: p0 (most urgent) to p4. A todo with no
+        /// priority is listed after p4
+        #[arg(long, value_name = "P0-P4")]
+        priority: Option<String>,
         /// Save nothing: only list stored todos that this may duplicate
         #[arg(long)]
         check: bool,
@@ -501,6 +509,8 @@ pub enum TodoCommand {
     },
     /// Mark a todo as done
     Done { id: String },
+    /// Open a todo again that was done or dropped
+    Reopen { id: String },
 }
 
 #[derive(Subcommand)]

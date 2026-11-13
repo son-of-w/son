@@ -305,6 +305,15 @@ pub fn node_faults(node: &Node) -> Vec<String> {
             faults.push("merged_into is not an id".to_string());
         }
     }
+    match (&node.priority, node.kind.as_str()) {
+        (Some(priority), _) if !store::PRIORITIES.contains(&priority.as_str()) => {
+            faults.push(format!("priority '{}' is not known", shown(priority)));
+        }
+        (Some(_), kind) if kind != "todo" => {
+            faults.push("only a todo can have a priority".to_string());
+        }
+        _ => {}
+    }
     if node.rev < 1 {
         faults.push(format!("rev {} is less than 1", node.rev));
     }
@@ -548,8 +557,8 @@ pub fn import(
                 "INSERT INTO nodes (id, type, title, body, status, project_id, created_at, updated_at, \
                                     deleted_at, source, origin, author, visibility, rev, \
                                     evidence, verified_at, verified_by, verified_note, merged_into, \
-                                    stale_at, stale_note) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21) \
+                                    stale_at, stale_note, priority) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22) \
                  ON CONFLICT(id) DO UPDATE SET \
                     type = excluded.type, title = excluded.title, body = excluded.body, \
                     status = excluded.status, project_id = excluded.project_id, \
@@ -560,7 +569,7 @@ pub fn import(
                     evidence = excluded.evidence, verified_at = excluded.verified_at, \
                     verified_by = excluded.verified_by, verified_note = excluded.verified_note, \
                     merged_into = excluded.merged_into, stale_at = excluded.stale_at, \
-                    stale_note = excluded.stale_note",
+                    stale_note = excluded.stale_note, priority = excluded.priority",
                 params![
                     node.id,
                     node.kind,
@@ -582,7 +591,8 @@ pub fn import(
                     node.verified_note,
                     node.merged_into,
                     node.stale_at,
-                    node.stale_note
+                    node.stale_note,
+                    node.priority
                 ],
             )?;
             store::set_tags(conn, &node.id, &node.tags)?;

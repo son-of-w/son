@@ -79,7 +79,10 @@ fn tags(node: &Node) -> String {
 /// One line for a node: `` `id` [type] title (collection) #tags ``.
 pub fn line(node: &Node) -> String {
     let status = match (node.kind.as_str(), node.status.as_deref()) {
-        ("todo", Some(status)) => format!(" [{status}]"),
+        ("todo", Some(status)) => match &node.priority {
+            Some(priority) => format!(" [{status}, {priority}]"),
+            None => format!(" [{status}]"),
+        },
         _ => String::new(),
     };
     format!(
@@ -646,6 +649,14 @@ pub fn recall(
     }
 }
 
+/// `P1 ` before a todo that has a priority, else nothing.
+fn priority_mark(node: &Node) -> String {
+    node.priority
+        .as_ref()
+        .map(|p| format!("{} ", p.to_uppercase()))
+        .unwrap_or_default()
+}
+
 fn todo_box(node: &Node) -> &'static str {
     match node.status.as_deref() {
         Some("done") => "[x]",
@@ -666,8 +677,9 @@ pub fn todos(nodes: &[Node], scope: &str, json: bool) {
     println!("# Todos: {scope}");
     for node in nodes {
         println!(
-            "- {} `{}` {} ({}){}",
+            "- {} {}`{}` {} ({}){}",
             todo_box(node),
+            priority_mark(node),
             node.short(),
             node.title,
             node.project_name(),
@@ -836,7 +848,14 @@ fn context_markdown(ctx: &Context, shape: &ContextShape) -> String {
                     }
                 }
                 "todos" => {
-                    let _ = writeln!(out, "- [ ] `{}` {}{}", node.short(), node.title, tags(node));
+                    let _ = writeln!(
+                        out,
+                        "- [ ] {}`{}` {}{}",
+                        priority_mark(node),
+                        node.short(),
+                        node.title,
+                        tags(node)
+                    );
                 }
                 _ => {
                     let first = first_line(&node.body);

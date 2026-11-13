@@ -311,6 +311,155 @@ fn todos_add_list_done() {
 }
 
 #[test]
+fn todos_have_a_priority_and_can_be_opened_again() {
+    let sb = Sandbox::new("todo-priority");
+    let add = |title: &str, priority: Option<&str>| {
+        let mut args = vec!["todo", "add", title];
+        if let Some(p) = priority {
+            args.extend(["--priority", p]);
+        }
+        sb.ok("alpha", &args).id()
+    };
+    // Added in this order; listed by priority, then oldest first.
+    let plain_old = add("No priority, older", None);
+    let low = add("Low", Some("p4"));
+    let urgent = add("Urgent", Some("P0"));
+    let normal_old = add("Normal, older", Some("p2"));
+    let normal_new = add("Normal, newer", Some("p2"));
+    let plain_new = add("No priority, newer", None);
+    let want = [
+        &urgent,
+        &normal_old,
+        &normal_new,
+        &low,
+        &plain_old,
+        &plain_new,
+    ];
+
+    let list = sb.ok("alpha", &["todo", "list"]).stdout;
+    let places: Vec<usize> = want.iter().map(|id| position(&list, id)).collect();
+    assert!(places.windows(2).all(|w| w[0] < w[1]), "{list}");
+    assert!(
+        list.contains("- [ ] P0 `") && list.contains("- [ ] `"),
+        "{list}"
+    );
+    let json = sb.ok("alpha", &["--json", "todo", "list"]).json();
+    let ids: Vec<&str> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["short_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, want.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    assert_eq!(json[0]["priority"], "p0");
+    assert!(json[5]["priority"].is_null());
+    // Context shows the open todos in the same order.
+    let context = sb.ok("alpha", &["context"]).stdout;
+    let places: Vec<usize> = want.iter().map(|id| position(&context, id)).collect();
+    assert!(places.windows(2).all(|w| w[0] < w[1]), "{context}");
+    assert!(context.contains("- [ ] P0 `"), "{context}");
+
+    // Change it, take it away, and undo.
+    let out = sb.ok("alpha", &["edit", &low, "--priority", "p1"]).stdout;
+    assert!(out.contains("[open, p1]"), "{out}");
+    assert!(sb
+        .ok("alpha", &["history", &low])
+        .stdout
+        .contains("priority p4 → p1"));
+    sb.ok("alpha", &["edit", &low, "--priority", "none"]);
+    assert!(sb.ok("alpha", &["--json", "show", &low]).json()["priority"].is_null());
+    sb.ok("alpha", &["undo", &low]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &low]).json()["priority"],
+        "p1"
+    );
+
+    // A value that is not a priority, and a node that is not a todo.
+    let (status, error) = json_error(&sb, "alpha", &["todo", "add", "Bad", "--priority", "high"]);
+    assert_eq!(
+        (status, error["code"].as_str().unwrap()),
+        (1, "invalid_argument")
+    );
+    let note = sb.ok("alpha", &["remember", "note", "Not a todo"]).id();
+    let (_, error) = json_error(&sb, "alpha", &["edit", &note, "--priority", "p1"]);
+    assert_eq!(error["code"], "invalid_request");
+    sb.ok("alpha", &["edit", &note, "--priority", "none"]);
+    // A todo that becomes a note keeps no priority.
+    sb.ok("alpha", &["edit", &low, "--type", "note"]);
+    assert!(sb.ok("alpha", &["--json", "show", &low]).json()["priority"].is_null());
+
+    // Priority goes through an export and an import.
+    let export = sb.ok("alpha", &["--json", "export"]).stdout;
+    let other = Sandbox::new("todo-priority-import");
+    let file = other.root.join("in.json");
+    std::fs::write(&file, &export).unwrap();
+    other.ok("alpha", &["import", file.to_str().unwrap()]);
+    assert_eq!(
+        other.ok("alpha", &["--json", "show", &urgent]).json()["priority"],
+        "p0"
+    );
+    // An import refuses a priority it does not know.
+    std::fs::write(
+        &file,
+        export.replace("\"priority\": \"p0\"", "\"priority\": \"p7\""),
+    )
+    .unwrap();
+    let out = other.son("alpha", &["import", file.to_str().unwrap()]);
+    assert!(
+        out.stderr.contains("priority 'p7' is not known"),
+        "{}",
+        out.stderr
+    );
+
+    // Reopen: a done todo and a dropped one are open again, in the
+    // history, and the reopening can be undone.
+    sb.ok("alpha", &["todo", "done", &urgent]);
+    let out = sb.ok("alpha", &["todo", "reopen", &urgent]).stdout;
+    assert!(
+        out.starts_with("reopened") && out.contains("[open, p0]"),
+        "{out}"
+    );
+    assert!(sb.ok("alpha", &["todo", "list"]).stdout.contains(&urgent));
+    assert!(sb
+        .ok("alpha", &["history", &urgent])
+        .stdout
+        .contains("reopen"));
+    sb.ok("alpha", &["undo", &urgent]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &urgent]).json()["status"],
+        "done"
+    );
+    sb.ok("alpha", &["edit", &normal_old, "--status", "dropped"]);
+    sb.ok("alpha", &["todo", "reopen", &normal_old]);
+    assert_eq!(
+        sb.ok("alpha", &["--json", "show", &normal_old]).json()["status"],
+        "open"
+    );
+    // Reopening an open todo changes nothing; a note cannot be reopened;
+    // a todo removed with `son drop` needs `son restore`.
+    sb.ok("alpha", &["todo", "reopen", &normal_old]);
+    assert!(!sb.son("alpha", &["todo", "reopen", &note]).ok);
+    sb.ok("alpha", &["drop", &normal_new]);
+    let out = sb.son("alpha", &["todo", "reopen", &normal_new]);
+    assert!(
+        !out.ok && out.stderr.contains("son restore"),
+        "{}",
+        out.stderr
+    );
+
+    // A key: the same request with the same priority is a replay.
+    let keyed = ["todo", "add", "Keyed", "--priority", "p3", "--key", "k"];
+    let first = sb.ok("alpha", &keyed).id();
+    assert_eq!(sb.ok("alpha", &keyed).id(), first);
+    let (_, error) = json_error(
+        &sb,
+        "alpha",
+        &["todo", "add", "Keyed", "--priority", "p1", "--key", "k"],
+    );
+    assert_eq!(error["code"], "idempotency_conflict");
+}
+
+#[test]
 fn a_marker_file_names_the_collection() {
     let sb = Sandbox::new("marker");
     let nested = sb.root.join("alpha").join("deep").join("er");
@@ -1977,19 +2126,19 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
         found.sort();
         found
     };
-    // Bring a database back to schema 8: take away what schema 9 added.
+    // Bring a database back to schema 8: take away what schemas 9 and 10 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "ALTER TABLE nodes DROP COLUMN stale_at; ALTER TABLE nodes DROP COLUMN stale_note; \
-             PRAGMA user_version = 8;",
+            "ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
+             ALTER TABLE nodes DROP COLUMN stale_note; PRAGMA user_version = 8;",
         )
         .unwrap();
     };
 
     // A new database: created, and no copy.
     let first = sb.ok("alpha", &["init", "--db-only"]).stdout;
-    assert!(first.contains("database: created (schema 9)"), "{first}");
+    assert!(first.contains("database: created (schema 10)"), "{first}");
     let again = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
     assert_eq!(again["database_state"]["state"], "current");
     assert!(copies().is_empty());
@@ -2004,7 +2153,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let state = &report["database_state"];
     assert_eq!(state["state"], "upgraded");
     assert_eq!(state["from"], 8);
-    assert_eq!(state["schema"], 9);
+    assert_eq!(state["schema"], 10);
     let found = copies();
     assert_eq!(found.len(), 1);
     assert_eq!(state["copy"], found[0].display().to_string());
@@ -2019,7 +2168,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let out = sb.ok("alpha", &["--json", "list"]);
     assert!(
         out.stderr
-            .contains("son: database: upgraded from schema 8 to 9"),
+            .contains("son: database: upgraded from schema 8 to 10"),
         "{}",
         out.stderr
     );
@@ -3610,12 +3759,12 @@ fn doctor_reports_and_changes_nothing() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
-    raw().execute_batch("PRAGMA user_version = 9").unwrap();
+    raw().execute_batch("PRAGMA user_version = 10").unwrap();
     raw().execute_batch("PRAGMA user_version = 999").unwrap();
     let (ok, report) = status(&sb);
     assert!(!ok);
     assert_eq!(of(&report, "schema"), "problem");
-    raw().execute_batch("PRAGMA user_version = 9").unwrap();
+    raw().execute_batch("PRAGMA user_version = 10").unwrap();
 
     // A row that points at nothing.
     raw()
