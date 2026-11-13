@@ -1,6 +1,6 @@
 [package]
 name = "son-of-w"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 description = "One memory for every AI agent: a local store of decisions, patterns, facts and todos"
 homepage = "https://son-of-w.com"
