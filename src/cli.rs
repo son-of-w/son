@@ -165,6 +165,16 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print a completion script for your shell
+    ///
+    /// The script completes the commands and flags of son. It is for the
+    /// person who types son commands; agents do not need it. How to
+    /// install it for each shell is in the README. Shells: bash, zsh,
+    /// fish, powershell (and elvish).
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Save a node: decision, pattern, fact, note, todo or collection
     Remember {
         #[arg(value_enum)]

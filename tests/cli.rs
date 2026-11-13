@@ -2782,6 +2782,32 @@ fn a_tag_filter_keeps_only_nodes_with_every_tag() {
     assert!(!sb.son("alpha", &["tags", "--collection", "nope"]).ok);
 }
 
+#[test]
+fn completions_are_printed_for_each_shell_with_no_database() {
+    let sb = Sandbox::new("completions");
+    for (shell, sign) in [
+        ("bash", "complete -F"),
+        ("zsh", "#compdef son"),
+        ("fish", "complete -c son"),
+        ("powershell", "Register-ArgumentCompleter"),
+        ("elvish", "edit:completion:arg-completer[son]"),
+    ] {
+        let out = sb.ok("alpha", &["completions", shell]).stdout;
+        assert!(out.contains(sign), "{shell}: no '{sign}'");
+        // It knows the commands, a subcommand of a command, and a flag.
+        for word in ["recall", "uninstall", "reopen", "max-chars"] {
+            assert!(out.contains(word), "{shell}: '{word}' is missing");
+        }
+    }
+    let (status, error) = json_error(&sb, "alpha", &["completions", "tcsh"]);
+    assert_eq!(
+        (status, error["code"].as_str().unwrap()),
+        (2, "invalid_argument")
+    );
+    // No database was made, so nothing was logged either.
+    assert!(!sb.root.join("son.db").exists());
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

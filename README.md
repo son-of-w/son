@@ -189,6 +189,19 @@ son init --yes
 
 `--yes` takes the detected agents and the global scope. `--scope project` installs into the current project (the git root). Other flags: `--list-agents`, `--skill-only`, `--db-only`, `--print-skill`, `--print-block`.
 
+### Shell completion
+
+If you type `son` commands yourself, your shell can complete the commands and flags. Agents do not need this. A package manager that has a place for completion scripts installs them for you. Otherwise, run the line for your shell once:
+
+```bash
+son completions bash > ~/.local/share/bash-completion/completions/son    # bash (make the folder first)
+son completions zsh > "${fpath[1]}/_son"                                 # zsh: any folder in $fpath
+son completions fish > ~/.config/fish/completions/son.fish               # fish
+son completions powershell >> $PROFILE                                   # PowerShell
+```
+
+Run it again after you install a new version of `son`. The script completes commands and flags; it does not complete collection names, tags or ids. `son init` does not install it and does not change your shell's startup files.
+
 ### Remove son from your agents
 
 ```bash
@@ -314,6 +327,7 @@ son collections
 son synonym add <term> <canonical> | list | remove <term>
 son export [--collection <name>] [--tag a,b]   markdown; add --json for the portable format
 son tags [--collection <name>]             the tags in use, with counts
+son completions <bash|zsh|fish|powershell> print a completion script for your shell
 son import <file|-> [--replace]            merge a JSON export, or restore a backup
 son backup <file|folder>                   write a full copy of the database
 son doctor                                 check the database and the agent setup

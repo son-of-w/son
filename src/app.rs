@@ -45,6 +45,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
     Some(match command {
         Command::Init { .. }
         | Command::Uninstall { .. }
+        | Command::Completions { .. }
         | Command::Doctor
         | Command::List { .. }
         | Command::Log { .. }
@@ -105,6 +106,13 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", instructions::skill());
             return Ok(());
         }
+    }
+    if let Command::Completions { shell } = &cli.command {
+        // Made from the command definitions. No database is opened or
+        // made, and nothing goes into the activity log.
+        use clap::CommandFactory;
+        clap_complete::generate(*shell, &mut Cli::command(), "son", &mut std::io::stdout());
+        return Ok(());
     }
     if let Command::Uninstall {
         agent,
@@ -461,6 +469,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         Command::Doctor => unreachable!("doctor runs before the database is opened"),
         Command::Uninstall { .. } => {
             unreachable!("uninstall runs before the database is opened")
+        }
+        Command::Completions { .. } => {
+            unreachable!("completions are printed before the database is opened")
         }
         Command::Context {
             collection: project,
