@@ -245,7 +245,8 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 
 ### Backup and export
 
-- **Backups are full, and made only when you ask.** `son backup <file>` writes one SQLite file that holds everything at one moment: nodes, links, evidence, history, the activity log and keys. SQLite makes it from one read of the database, so it is consistent while other sessions write. It never overwrites a file; give a folder and it makes `son-backup-<time>.db` in it. No command makes a backup by itself, and old backups are never removed.
+- **Backups are full, and made only when you ask.** `son backup <file>` writes one SQLite file that holds everything at one moment: nodes, links, evidence, history, the activity log and keys. SQLite makes it from one read of the database, so it is consistent while other sessions write. It never overwrites a file; give a folder and it makes `son-backup-<time>.db` in it. No command makes a backup by itself, with one exception (the next point), and old backups are never removed.
+- **A schema upgrade copies the database first.** When a newer `son` meets a database of an older schema, the first command that can write upgrades it; `son init` is the command to run after you install a new version, and it says what it did: `created`, `up to date`, or `upgraded from schema N to M` with the place of the copy. Before the upgrade of a database that holds nodes, `son` writes a full copy of it to the `backups` folder beside the database (`~/.son-of-w/backups/son-before-schema-<old version>-<time>.db`). If the copy cannot be written, nothing is upgraded and the command fails with `upgrade_backup_failed`. `son` never removes these copies; `son doctor` lists them with their sizes, and you can delete them. Put one back with `son import <file> --replace`. `SON_NO_UPGRADE_BACKUP=1` upgrades with no copy.
 - **A restore is exact.** `son import <backup file>` is a full restore, not a merge, and afterwards the database holds exactly what the backup holds. Into an empty database it needs nothing more; into a database that holds anything (nodes, history, log entries or keys) it is refused unless you add `--replace`. The file is checked first (it is a `son` database, of a schema this `son` knows, and SQLite finds it whole), the work is one transaction, and a failure leaves the database as it was; the backup file is only read. An older backup is brought to the current schema as it is restored.
 - **Two formats, two jobs.** The JSON export (`son export --json`) is for moving knowledge: it is readable, it merges on import, and it carries nodes, links and synonyms, without history, the log or keys. The backup is for getting a database back exactly. `son import` takes both and tells them apart by content; `-` reads a JSON export from stdin.
 - **A JSON import is checked before it is saved.** Every record is looked at first: the id has the form `son` makes (26 digits and uppercase letters), the type, status, evidence category, reference kinds and relations are ones this `son` knows, the times are times, each node is in a collection that is in the file or stored here, and no id is in the file twice. One fault refuses the whole file with `import_failed`, lists the faults with their place in the file (the first 20, and a count), and changes nothing. A field this `son` does not know is ignored; a value it does not know is refused, and can mean the file is from a newer `son`. A backup restore is an exact copy and is not checked record by record; `son doctor` reports stored nodes of a form it does not know, and names `son drop '<id>' --purge` for each.
@@ -306,6 +307,7 @@ Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every 
 | `SON_COLLECTION` | Name the current collection |
 | `SON_BUSY_MS` | How long to wait for a locked database, in milliseconds (default 10 seconds) |
 | `SON_SOURCE` | A session name to record in the activity log |
+| `SON_NO_UPGRADE_BACKUP=1` | Upgrade the schema of an older database without first writing a copy of it |
 | `SON_NO_LOG=1` | Turn the activity log off. The log is local |
 | `SON_REVIEW_FACT_DAYS`, `SON_REVIEW_DECISION_DAYS`, `SON_REVIEW_TODO_DAYS` | The age limits for `son review` |
 
@@ -333,6 +335,7 @@ With `--json`, a command that succeeds writes its result to stdout. A command th
 | `database_busy` | Another session held the database for longer than the wait. Run it again |
 | `database_error` | SQLite reported another error |
 | `unsupported_schema` | The database is from a newer `son`, or a read-only command met an older one |
+| `upgrade_backup_failed` | The database is of an older schema, and the copy that is made before an upgrade could not be written. Nothing was changed |
 | `conflict` | `son undo` found a later change, or the change was already undone. Nothing was changed |
 | `unavailable` | `son undo` needs history that was purged. Nothing was changed |
 | `idempotency_conflict` | The `--key` was already used for a different write. Nothing was saved |

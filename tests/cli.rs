@@ -1966,6 +1966,121 @@ fn a_stored_row_of_an_unknown_form_does_not_crash_and_doctor_names_it() {
     assert_eq!(check["status"], "healthy");
 }
 
+#[test]
+fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
+    let sb = Sandbox::new("upgrade-copy");
+    let db = sb.root.join("son.db");
+    let copies = || -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(sb.root.join("backups"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        found.sort();
+        found
+    };
+    // Bring a database back to schema 8: take away what schema 9 added.
+    let downgrade = || {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE nodes DROP COLUMN stale_at; ALTER TABLE nodes DROP COLUMN stale_note; \
+             PRAGMA user_version = 8;",
+        )
+        .unwrap();
+    };
+
+    // A new database: created, and no copy.
+    let first = sb.ok("alpha", &["init", "--db-only"]).stdout;
+    assert!(first.contains("database: created (schema 9)"), "{first}");
+    let again = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
+    assert_eq!(again["database_state"]["state"], "current");
+    assert!(copies().is_empty());
+
+    // An older database with nodes: `son init` upgrades it, says so, and
+    // names the copy.
+    let id = sb
+        .ok("alpha", &["remember", "fact", "Kept across the upgrade"])
+        .id();
+    downgrade();
+    let report = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
+    let state = &report["database_state"];
+    assert_eq!(state["state"], "upgraded");
+    assert_eq!(state["from"], 8);
+    assert_eq!(state["schema"], 9);
+    let found = copies();
+    assert_eq!(found.len(), 1);
+    assert_eq!(state["copy"], found[0].display().to_string());
+    assert!(sb
+        .ok("alpha", &["show", &id])
+        .stdout
+        .contains("Kept across the upgrade"));
+
+    // Any other command upgrades too, and says it on stderr only.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    downgrade();
+    let out = sb.ok("alpha", &["--json", "list"]);
+    assert!(
+        out.stderr
+            .contains("son: database: upgraded from schema 8 to 9"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.json().is_object() || out.json().is_array());
+    assert_eq!(copies().len(), 2);
+
+    // The switch: no copy.
+    downgrade();
+    let out = sb
+        .command("alpha", &["init", "--db-only"])
+        .env("SON_NO_UPGRADE_BACKUP", "1")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .contains("no copy was made (SON_NO_UPGRADE_BACKUP is set)"));
+    assert_eq!(copies().len(), 2);
+
+    // Doctor lists the copies and removes none.
+    let report = sb.ok("alpha", &["--json", "doctor"]).json();
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "upgrade copies")
+        .unwrap()
+        .clone();
+    assert_eq!(check["status"], "healthy");
+    assert!(check["detail"].as_str().unwrap().contains("2 copy(ies)"));
+    assert_eq!(copies().len(), 2);
+
+    // The copy can be put back: the data from before is there again.
+    sb.ok("alpha", &["remember", "fact", "Made after the upgrade"]);
+    sb.ok(
+        "alpha",
+        &["import", found[0].to_str().unwrap(), "--replace"],
+    );
+    let list = sb.ok("alpha", &["list"]).stdout;
+    assert!(list.contains("Kept across the upgrade") && !list.contains("Made after the upgrade"));
+    assert_eq!(copies().len(), 2, "a restore makes no copy of its own");
+
+    // The copy cannot be written: nothing is upgraded, and the error says
+    // how to go on.
+    downgrade();
+    let backups = sb.root.join("backups");
+    let aside = sb.root.join("backups-aside");
+    std::fs::rename(&backups, &aside).unwrap();
+    std::fs::write(&backups, "in the way").unwrap();
+    let output = sb
+        .command("alpha", &["--json", "context"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "upgrade_backup_failed");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

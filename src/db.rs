@@ -239,6 +239,12 @@ pub fn private_dir(dir: &Path) -> std::io::Result<()> {
 /// as it is: someone may have opened it to others on purpose, and
 /// `son doctor` reports it.
 pub fn private_file(path: &Path) -> std::io::Result<()> {
+    claim_private_file(path).map(|_| ())
+}
+
+/// [`private_file`], and say if this call made the file. Two sessions
+/// that ask for the same new file at once: exactly one gets `true`.
+fn claim_private_file(path: &Path) -> std::io::Result<bool> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -247,14 +253,96 @@ pub fn private_file(path: &Path) -> std::io::Result<()> {
         options.mode(0o600);
     }
     match options.open(path) {
-        Ok(_) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(err) => Err(err),
+    }
+}
+
+/// What opening the database did to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Opened {
+    /// There was no schema; it was made.
+    Created,
+    /// The schema was the one this son uses.
+    Current,
+    /// The schema was older and was brought up to date. `copy` is the copy
+    /// of the database from before, when one was made.
+    Upgraded { from: i64, copy: Option<PathBuf> },
+}
+
+impl Opened {
+    /// One line for a person.
+    pub fn line(&self) -> String {
+        match self {
+            Opened::Created => format!("database: created (schema {SCHEMA_VERSION})"),
+            Opened::Current => format!("database: schema {SCHEMA_VERSION}, up to date"),
+            Opened::Upgraded {
+                from,
+                copy: Some(copy),
+            } => format!(
+                "database: upgraded from schema {from} to {SCHEMA_VERSION}; the old database was copied to {}",
+                copy.display()
+            ),
+            Opened::Upgraded { from, copy: None } => format!(
+                "database: upgraded from schema {from} to {SCHEMA_VERSION}; no copy was made ({})",
+                if upgrade_copy_wanted() {
+                    "it held no nodes"
+                } else {
+                    "SON_NO_UPGRADE_BACKUP is set"
+                }
+            ),
+        }
+    }
+
+    /// The same for `--json`.
+    pub fn json(&self) -> serde_json::Value {
+        let (state, from, copy) = match self {
+            Opened::Created => ("created", None, None),
+            Opened::Current => ("current", None, None),
+            Opened::Upgraded { from, copy } => (
+                "upgraded",
+                Some(*from),
+                copy.as_ref().map(|c| c.display().to_string()),
+            ),
+        };
+        serde_json::json!({ "state": state, "schema": SCHEMA_VERSION, "from": from, "copy": copy })
+    }
+}
+
+/// False when `SON_NO_UPGRADE_BACKUP` is set: upgrade the schema without
+/// a copy of the database from before.
+pub fn upgrade_copy_wanted() -> bool {
+    std::env::var_os("SON_NO_UPGRADE_BACKUP").is_none_or(|v| v.is_empty() || v == "0")
+}
+
+/// The folder for the copies made before a schema upgrade: `backups`
+/// beside the database.
+pub fn upgrade_copy_dir(database: &Path) -> PathBuf {
+    match database.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(dir) => dir.join("backups"),
+        None => PathBuf::from("backups"),
     }
 }
 
 /// Open the database, creating and migrating it if needed.
 pub fn open(path: &Path) -> Result<Connection> {
+    open_reporting(path).map(|(conn, _)| conn)
+}
+
+/// [`open`], and say what was done. Before a schema upgrade of a database
+/// that holds nodes, a copy of the database is written (see [`migrate`]).
+pub fn open_reporting(path: &Path) -> Result<(Connection, Opened)> {
+    open_with(path, upgrade_copy_wanted())
+}
+
+/// [`open`] with no copy before a schema upgrade. For a file that is
+/// itself a temporary copy.
+pub fn open_without_copy(path: &Path) -> Result<Connection> {
+    open_with(path, false).map(|(conn, _)| conn)
+}
+
+fn open_with(path: &Path, copy: bool) -> Result<(Connection, Opened)> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         private_dir(parent).with_context(|| format!("cannot create {}", parent.display()))?;
     }
@@ -282,8 +370,68 @@ pub fn open(path: &Path) -> Result<Connection> {
     // writes a row to the activity log.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
-    migrate(&conn)?;
-    Ok(conn)
+    let opened = migrate(&conn, path, copy)?;
+    Ok((conn, opened))
+}
+
+/// Write a copy of the database as it is now, before its schema is
+/// upgraded from `version`. SQLite makes the copy from one read of the
+/// database, so it is whole. The file is new: a copy never replaces one.
+/// `None` when another session upgraded the database in the meantime, so
+/// that there is nothing old left to copy.
+fn copy_before_upgrade(
+    conn: &Connection,
+    database: &Path,
+    version: i64,
+) -> Result<Option<PathBuf>> {
+    let dir = upgrade_copy_dir(database);
+    private_dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let stamp: String =
+        conn.query_row("SELECT strftime('%Y%m%d-%H%M%S', 'now')", [], |r| r.get(0))?;
+    // Take a name that no other session has: making the file is the claim.
+    let mut number = 1;
+    let target = loop {
+        let name = if number == 1 {
+            format!("son-before-schema-{version}-{stamp}.db")
+        } else {
+            format!("son-before-schema-{version}-{stamp}-{number}.db")
+        };
+        let target = dir.join(name);
+        if claim_private_file(&target)
+            .with_context(|| format!("cannot create {}", target.display()))?
+        {
+            break target;
+        }
+        number += 1;
+    };
+    let name = target
+        .to_str()
+        .map(|name| name.replace('\'', "''"))
+        .with_context(|| format!("the path {} is not valid text", target.display()));
+    let written = name.and_then(|name| {
+        retry_busy(|| conn.execute_batch(&format!("VACUUM INTO '{name}'")))?;
+        // Read it back before the upgrade relies on it.
+        let copy =
+            Connection::open_with_flags(&target, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let copied: i64 = copy.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let _: i64 = copy.query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))?;
+        Ok(copied)
+    });
+    match written {
+        Ok(copied) if copied == version => Ok(Some(target)),
+        Ok(SCHEMA_VERSION) => {
+            let _ = std::fs::remove_file(&target);
+            Ok(None)
+        }
+        Ok(copied) => {
+            let _ = std::fs::remove_file(&target);
+            anyhow::bail!("the copy is schema version {copied}, not {version}")
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&target);
+            Err(err.context(format!("cannot write {}", target.display())))
+        }
+    }
 }
 
 /// Open an existing database for reading only. Nothing is created, changed
@@ -368,10 +516,23 @@ fn user_version(conn: &Connection) -> Result<i64> {
     retry_busy(|| conn.query_row("PRAGMA user_version", [], |r| r.get(0))).map_err(busy_error)
 }
 
-fn migrate(conn: &Connection) -> Result<()> {
+/// Bring the schema to [`SCHEMA_VERSION`].
+///
+/// Before an older database that holds nodes is upgraded, a copy of it is
+/// written to the `backups` folder beside it (when `copy` is true). This
+/// is the one backup that son makes without being asked. If the copy
+/// cannot be written, nothing is upgraded.
+///
+/// The copy is made before the write lock is taken, because SQLite cannot
+/// make it inside a transaction. All upgrade steps are one transaction, so
+/// a copy holds the old schema whole or the new one whole, never a part;
+/// a copy that is not of the old version is refused. Several sessions that
+/// start at once can each make a copy of the same old state; one of them
+/// does the upgrade, and the others remove their copy.
+fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
     let version = user_version(conn)?;
     if version == SCHEMA_VERSION {
-        return Ok(());
+        return Ok(Opened::Current);
     }
     if version > SCHEMA_VERSION {
         return Err(crate::error::coded(
@@ -381,11 +542,52 @@ fn migrate(conn: &Connection) -> Result<()> {
             ),
         ));
     }
+    let mut copied: Option<PathBuf> = None;
+    if version >= 1 && copy {
+        let nodes: i64 =
+            retry_busy(|| conn.query_row("SELECT count(*) FROM nodes", [], |r| r.get(0)))
+                .map_err(busy_error)?;
+        if nodes > 0 {
+            copied = copy_before_upgrade(conn, database, version).map_err(|err| {
+                crate::error::coded(
+                    "upgrade_backup_failed",
+                    format!(
+                        "the database was not upgraded from schema {version} to {SCHEMA_VERSION}, \
+                         because the copy of the old database could not be written: {err:#}. \
+                         Nothing was changed. Make room or correct the access of the folder and run \
+                         the command again; or set SON_NO_UPGRADE_BACKUP=1 to upgrade with no copy"
+                    ),
+                )
+            })?;
+        }
+    }
+    let discard = |copied: &Option<PathBuf>| {
+        if let Some(file) = copied {
+            let _ = std::fs::remove_file(file);
+        }
+    };
     // Take the write lock, then look again: another session may have
-    // created the schema while this one waited.
-    retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE")).map_err(busy_error)?;
+    // created or upgraded the schema while this one waited.
+    if let Err(err) = retry_busy(|| conn.execute_batch("BEGIN IMMEDIATE")) {
+        discard(&copied);
+        return Err(busy_error(err));
+    }
+    let before = match user_version(conn) {
+        Ok(before) => before,
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            discard(&copied);
+            return Err(err);
+        }
+    };
+    if before == SCHEMA_VERSION {
+        // Another session did the upgrade, and made its own copy.
+        let _ = conn.execute_batch("ROLLBACK");
+        discard(&copied);
+        return Ok(Opened::Current);
+    }
     let result = (|| -> Result<()> {
-        let version = user_version(conn)?;
+        let version = before;
         if version < 1 {
             conn.execute_batch(SCHEMA_V1)?;
         }
@@ -419,10 +621,18 @@ fn migrate(conn: &Connection) -> Result<()> {
     match result {
         Ok(()) => {
             conn.execute_batch("COMMIT")?;
-            Ok(())
+            Ok(if before < 1 {
+                Opened::Created
+            } else {
+                Opened::Upgraded {
+                    from: before,
+                    copy: copied,
+                }
+            })
         }
         Err(err) => {
             let _ = conn.execute_batch("ROLLBACK");
+            discard(&copied);
             Err(err)
         }
     }
@@ -438,6 +648,173 @@ mod tests {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
         path
+    }
+
+    /// A version 8 database with one collection and one note in it.
+    fn version_8(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        for step in [
+            SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+        ] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.execute_batch(
+            "INSERT INTO nodes (id, type, title, created_at, updated_at) \
+             VALUES ('01C', 'collection', 'old', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+             INSERT INTO nodes (id, type, title, project_id, created_at, updated_at) \
+             VALUES ('01X', 'note', 'kept', '01C', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("son-db-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn copies(dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir.join("backups"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn an_upgrade_first_writes_a_copy_of_the_old_database() {
+        let dir = temp_dir("copy");
+        let path = dir.join("son.db");
+        version_8(&path);
+        let (conn, opened) = open_with(&path, true).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), SCHEMA_VERSION);
+        let found = copies(&dir);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            opened,
+            Opened::Upgraded {
+                from: 8,
+                copy: Some(found[0].clone())
+            }
+        );
+        let name = found[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("son-before-schema-8-") && name.ends_with(".db"));
+        // The copy is the old database: old schema, old rows.
+        let copy = Connection::open(&found[0]).unwrap();
+        assert_eq!(user_version(&copy).unwrap(), 8);
+        let title: String = copy
+            .query_row("SELECT title FROM nodes WHERE id = '01X'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "kept");
+        assert!(copy.prepare("SELECT stale_at FROM nodes").is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&found[0]).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        // Opening again is no upgrade, and makes no second copy.
+        drop(conn);
+        assert_eq!(open_with(&path, true).unwrap().1, Opened::Current);
+        assert_eq!(copies(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_copy_for_a_new_or_empty_database_or_when_switched_off() {
+        let dir = temp_dir("nocopy");
+        // New.
+        assert_eq!(
+            open_with(&dir.join("new.db"), true).unwrap().1,
+            Opened::Created
+        );
+        // Old, with no nodes.
+        let empty = dir.join("empty.db");
+        version_8(&empty);
+        Connection::open(&empty)
+            .unwrap()
+            .execute_batch("DELETE FROM nodes")
+            .unwrap();
+        assert_eq!(
+            open_with(&empty, true).unwrap().1,
+            Opened::Upgraded {
+                from: 8,
+                copy: None
+            }
+        );
+        // Old, with nodes, and the copy switched off.
+        let off = dir.join("off.db");
+        version_8(&off);
+        assert_eq!(
+            open_with(&off, false).unwrap().1,
+            Opened::Upgraded {
+                from: 8,
+                copy: None
+            }
+        );
+        assert!(copies(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn when_the_copy_cannot_be_written_nothing_is_upgraded() {
+        let dir = temp_dir("copyfail");
+        let path = dir.join("son.db");
+        version_8(&path);
+        // A file where the folder for the copies must be.
+        std::fs::write(dir.join("backups"), "in the way").unwrap();
+        let err = open_with(&path, true).unwrap_err();
+        assert_eq!(crate::error::code_of(&err), "upgrade_backup_failed");
+        let message = format!("{err:#}");
+        assert!(message.contains("SON_NO_UPGRADE_BACKUP=1"), "{message}");
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 8);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        drop(conn);
+        // The way past it that the message names.
+        assert_eq!(
+            open_with(&path, false).unwrap().1,
+            Opened::Upgraded {
+                from: 8,
+                copy: None
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sessions_that_start_at_once_upgrade_once_and_keep_whole_copies() {
+        let dir = temp_dir("copyrace");
+        let path = dir.join("son.db");
+        version_8(&path);
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || open_with(&path, true).map(|(_, opened)| opened))
+            })
+            .collect();
+        let results: Vec<Opened> = handles
+            .into_iter()
+            .map(|h| h.join().unwrap().unwrap())
+            .collect();
+        let upgrades = results
+            .iter()
+            .filter(|r| matches!(r, Opened::Upgraded { .. }))
+            .count();
+        assert_eq!(upgrades, 1, "{results:?}");
+        // Every copy that stays is a whole copy of the old schema.
+        let found = copies(&dir);
+        assert!(!found.is_empty());
+        for file in found {
+            let copy = Connection::open(&file).unwrap();
+            assert_eq!(user_version(&copy).unwrap(), 8, "{}", file.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

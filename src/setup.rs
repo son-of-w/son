@@ -240,9 +240,10 @@ fn step_line(label: &str, step: &Step) -> String {
     }
 }
 
-pub fn run(database: &Path, opts: &Options) -> Result<()> {
+pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Result<()> {
     if !opts.json {
         println!("database ready: {}", database.display());
+        println!("{}", opened.line());
     }
     let root = project_root()?;
     let chosen = choose_agents(opts)?;
@@ -297,6 +298,7 @@ pub fn run(database: &Path, opts: &Options) -> Result<()> {
             .collect();
         render::print_json(&json!({
             "database": database.display().to_string(),
+            "database_state": opened.json(),
             "scope": scope.as_str(),
             "project_root": (scope == Scope::Project).then(|| root.display().to_string()),
             "installs": installs,

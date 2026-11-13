@@ -30,6 +30,8 @@ struct App {
     an: Analyzer,
     meta: Meta,
     json: bool,
+    /// What opening the database did: made it, upgraded it, or nothing.
+    opened: db::Opened,
     /// From `--allow-secret`: save text that looks like it holds a secret.
     allow_secret: bool,
     /// What the running command reports about itself for the activity log.
@@ -151,8 +153,16 @@ pub fn run(cli: Cli) -> Result<()> {
     }
     let started = Instant::now();
     let path = db::path()?;
+    let (conn, opened) = db::open_reporting(&path)?;
+    if matches!(opened, db::Opened::Upgraded { .. }) && !matches!(cli.command, Command::Init { .. })
+    {
+        // `son init` reports this itself. Any other command says it on
+        // stderr, so that its own output stays as it is.
+        eprintln!("son: {}", opened.line());
+    }
     let app = App {
-        conn: db::open(&path)?,
+        conn,
+        opened,
         an: Analyzer::new(),
         meta: Meta::from_env(),
         json: cli.json,
@@ -200,9 +210,13 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
         } => {
             if db_only {
                 if app.json {
-                    render::print_json(&json!({ "database": path.display().to_string() }));
+                    render::print_json(&json!({
+                        "database": path.display().to_string(),
+                        "database_state": app.opened.json(),
+                    }));
                 } else {
                     println!("database ready: {}", path.display());
+                    println!("{}", app.opened.line());
                 }
                 return Ok(());
             }
@@ -213,6 +227,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             };
             setup::run(
                 path,
+                &app.opened,
                 &setup::Options {
                     agents: agent,
                     scope,

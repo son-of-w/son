@@ -114,6 +114,7 @@ fn database_checks(path: &Path, checks: &mut Vec<Check>) {
         None,
     ));
     access_check(path, checks);
+    copies_check(path, checks);
 
     let current = db::SCHEMA_VERSION;
     checks.push(match version {
@@ -243,6 +244,44 @@ fn access_check(path: &Path, checks: &mut Vec<Check>) {
 
 #[cfg(not(unix))]
 fn access_check(_path: &Path, _checks: &mut Vec<Check>) {}
+
+/// The copies that were made before schema upgrades. son never removes
+/// them, so say that they are there and how large they are.
+fn copies_check(path: &Path, checks: &mut Vec<Check>) {
+    let dir = db::upgrade_copy_dir(path);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut copies: Vec<(String, u64)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let is_copy = name.starts_with("son-before-schema-") && name.ends_with(".db");
+            is_copy.then(|| (name, entry.metadata().map(|m| m.len()).unwrap_or(0)))
+        })
+        .collect();
+    if copies.is_empty() {
+        return;
+    }
+    copies.sort();
+    let total: u64 = copies.iter().map(|(_, bytes)| bytes).sum();
+    let names: Vec<String> = copies
+        .iter()
+        .map(|(name, bytes)| format!("{name} ({bytes} bytes)"))
+        .collect();
+    checks.push(check(
+        "upgrade copies",
+        Status::Healthy,
+        format!(
+            "{} copy(ies) of the database from before a schema upgrade in {}, {total} bytes in all: {}. \
+             son never removes them; delete the ones you no longer need. Restore one with `son import <file> --replace`",
+            copies.len(),
+            dir.display(),
+            names.join(", ")
+        ),
+        None,
+    ));
+}
 
 /// Look for stored text that looks like a secret. Only the id, the field
 /// and the kind are reported, never the text.

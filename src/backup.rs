@@ -239,7 +239,10 @@ pub fn restore(conn: &Connection, an: &Analyzer, source: &Path, replace: bool) -
         let copy = dir.join("copy.db");
         src.execute_batch(&format!("VACUUM INTO '{}'", sql_text(&copy)?))
             .map_err(|err| failed(format!("cannot read the backup: {err}")))?;
-        drop(db::open(&copy).map_err(|err| failed(format!("cannot upgrade the backup: {err:#}")))?);
+        drop(
+            db::open_without_copy(&copy)
+                .map_err(|err| failed(format!("cannot upgrade the backup: {err:#}")))?,
+        );
 
         conn.execute_batch(&format!("ATTACH DATABASE '{}' AS backup", sql_text(&copy)?))?;
         let done = store::write(conn, || {
