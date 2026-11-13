@@ -2860,8 +2860,13 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
         .join(".claude/projects")
         .join(&project_name)
         .join("memory");
-    write(&memory.join("MEMORY.md"), "- [A rule](a-rule.md)\n");
-    write(&memory.join("a-rule.md"), "Never push on Friday.\n");
+    // (Checked on macOS and Linux only: the way a Windows path becomes a
+    // folder name was not observed.)
+    let with_memory = cfg!(unix);
+    if with_memory {
+        write(&memory.join("MEMORY.md"), "- [A rule](a-rule.md)\n");
+        write(&memory.join("a-rule.md"), "Never push on Friday.\n");
+    }
     // Set up son: its skill is not the user's own, and a file that holds
     // only the block is not either.
     let init = sb
@@ -2871,14 +2876,16 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
 
     let found = paths(&[]);
     let names: Vec<&str> = found.iter().map(|(path, _)| path.as_str()).collect();
-    for want in [
+    let mut wanted = vec![
         "home/.claude/CLAUDE.md",
         "alpha/AGENTS.md",
         "alpha/.cursor/rules/style.mdc",
         "alpha/.github/copilot-instructions.md",
-        "memory/MEMORY.md",
-        "memory/a-rule.md",
-    ] {
+    ];
+    if with_memory {
+        wanted.extend(["memory/MEMORY.md", "memory/a-rule.md"]);
+    }
+    for want in &wanted {
         assert!(
             names.iter().any(|n| n.ends_with(want)),
             "{want} is not in {names:?}"
@@ -2889,7 +2896,7 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
         !names.iter().any(|n| n.ends_with(".codex/AGENTS.md")),
         "{names:?}"
     );
-    assert_eq!(names.len(), 6, "{names:?}");
+    assert_eq!(names.len(), wanted.len(), "{names:?}");
     let global = &found
         .iter()
         .find(|(p, _)| p.ends_with("home/.claude/CLAUDE.md"))
