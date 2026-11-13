@@ -20,3 +20,4 @@ pub mod secrets;
 pub mod setup;
 pub mod store;
 pub mod transfer;
+pub mod uninstall;

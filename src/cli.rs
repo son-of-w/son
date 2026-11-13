@@ -143,6 +143,28 @@ pub enum Command {
         #[arg(long)]
         print_skill: bool,
     },
+    /// Remove what `son init` wrote: the skill files and the instruction blocks
+    ///
+    /// The text you wrote around a block stays. The database is never
+    /// touched, and the `son` program is not removed. In a terminal this
+    /// lists the files and asks. With no --agent and no --scope it looks
+    /// at every agent, in the global scope and in this project. Some
+    /// agents share one file (`AGENTS.md`, `.agents/skills`): removing it
+    /// for one removes it for all of them.
+    Uninstall {
+        /// Only these agents, by name (comma-separated)
+        #[arg(long, short = 'a', value_delimiter = ',')]
+        agent: Vec<String>,
+        /// Only the global files, or only this project's
+        #[arg(long, value_enum)]
+        scope: Option<ScopeArg>,
+        /// Do not ask
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// List each file and what would be done to it; change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Save a node: decision, pattern, fact, note, todo or collection
     Remember {
         #[arg(value_enum)]

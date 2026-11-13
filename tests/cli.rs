@@ -2455,6 +2455,135 @@ fn context_says_when_the_agent_files_need_the_user() {
     assert!(!found[0].contains("son init"));
 }
 
+#[test]
+fn uninstall_removes_what_init_wrote_and_nothing_else() {
+    let sb = Sandbox::new("uninstall");
+    let home = sb.root.join("home");
+    let claude_md = home.join(".claude/CLAUDE.md");
+    let codex_md = home.join(".codex/AGENTS.md");
+    let skill = home.join(".claude/skills/son/SKILL.md");
+    let project_md = sb.root.join("alpha/CLAUDE.md");
+    std::fs::create_dir_all(claude_md.parent().unwrap()).unwrap();
+    let mine = "# My rules\n\nBe brief.\n";
+    std::fs::write(&claude_md, mine).unwrap();
+    // A skill of the user's own, beside son's: it must stay.
+    let own_skill = home.join(".claude/skills/mine/SKILL.md");
+    std::fs::create_dir_all(own_skill.parent().unwrap()).unwrap();
+    std::fs::write(&own_skill, "# mine\n").unwrap();
+
+    sb.ok("alpha", &["init", "-a", "claude-code,codex", "-g"]);
+    sb.ok(
+        "alpha",
+        &["init", "-a", "claude-code", "--scope", "project"],
+    );
+    sb.ok("alpha", &["remember", "fact", "Kept"]);
+    let db_before = std::fs::read(sb.root.join("son.db")).unwrap();
+    let installed = files_under(&home);
+
+    // Not a terminal, and no --yes: nothing is done.
+    let out = sb.son("alpha", &["uninstall"]);
+    assert!(!out.ok && out.stderr.contains("--yes"), "{}", out.stderr);
+    assert_eq!(files_under(&home), installed);
+
+    // A dry run lists every file and changes nothing.
+    let dry = sb.ok("alpha", &["--json", "uninstall", "--dry-run"]).json();
+    assert_eq!(dry["dry_run"], true);
+    let results: Vec<(String, String)> = dry["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap().replace('\\', "/"),
+                f["result"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let of = |end: &str| -> &str {
+        &results
+            .iter()
+            .find(|(path, _)| path.ends_with(end))
+            .unwrap_or_else(|| panic!("{end} is not in {results:?}"))
+            .1
+    };
+    assert_eq!(of("home/.claude/CLAUDE.md"), "would_remove_block");
+    assert_eq!(of("home/.codex/AGENTS.md"), "would_remove");
+    assert_eq!(of("home/.claude/skills/son/SKILL.md"), "would_remove");
+    assert_eq!(of("alpha/CLAUDE.md"), "would_remove");
+    assert_eq!(files_under(&home), installed);
+    assert!(project_md.exists());
+
+    // One scope and one agent only.
+    sb.ok("alpha", &["uninstall", "--scope", "project", "--yes"]);
+    assert!(!project_md.exists());
+    assert!(!sb.root.join("alpha/.claude/skills/son").exists());
+    assert_eq!(files_under(&home), installed);
+    sb.ok("alpha", &["uninstall", "-a", "codex", "--yes"]);
+    assert!(
+        !codex_md.exists(),
+        "a file that held only the block is deleted"
+    );
+    assert!(skill.exists() && claude_md.exists());
+
+    // A skill file changed by hand is still son's, and is removed. A file
+    // with broken marks is left, reported, and makes the run fail.
+    std::fs::write(
+        &skill,
+        "---\nname: son\n---\n# son: shared memory\nchanged by hand\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &codex_md,
+        "<!-- son:start -->\nhalf a block\n\n## Mine\nkeep\n",
+    )
+    .unwrap();
+    let output = sb
+        .command("alpha", &["--json", "uninstall", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let left: Vec<&Value> = report["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["result"] == "left")
+        .collect();
+    assert_eq!(left.len(), 1);
+    assert!(left[0]["reason"].as_str().unwrap().contains("a start mark"));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "uninstall_failed");
+    assert!(std::fs::read_to_string(&codex_md).unwrap().contains("keep"));
+    // The rest was done all the same.
+    assert!(!skill.exists());
+    assert!(
+        !skill.parent().unwrap().exists(),
+        "the empty son folder is removed"
+    );
+    assert_eq!(std::fs::read_to_string(&claude_md).unwrap(), mine);
+    assert_eq!(std::fs::read_to_string(&own_skill).unwrap(), "# mine\n");
+
+    // The database is as it was, and the output says where it is.
+    std::fs::remove_file(&codex_md).unwrap();
+    let out = sb.ok("alpha", &["uninstall", "--yes"]).stdout;
+    assert!(out.contains("No son skill file and no son block was found"));
+    assert!(out.contains("The database was not touched") && out.contains("son.db"));
+    assert!(out.contains("still installed"));
+    assert!(sb.ok("alpha", &["list"]).stdout.contains("Kept"));
+    let _ = db_before;
+
+    // Uninstall makes no database where there is none.
+    let empty = Sandbox::new("uninstall-empty");
+    empty.ok("alpha", &["uninstall", "--yes"]);
+    assert!(!empty.root.join("son.db").exists());
+
+    // Init after uninstall works again.
+    sb.ok("alpha", &INIT_CLAUDE);
+    assert!(std::fs::read_to_string(&claude_md)
+        .unwrap()
+        .starts_with(mine));
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

@@ -189,6 +189,16 @@ son init --yes
 
 `--yes` takes the detected agents and the global scope. `--scope project` installs into the current project (the git root). Other flags: `--list-agents`, `--skill-only`, `--db-only`, `--print-skill`, `--print-block`.
 
+### Remove son from your agents
+
+```bash
+son uninstall
+```
+
+`son uninstall` takes away what `son init` wrote. It deletes the `son` skill files and cuts the block out of the instruction files; the text you wrote around the block stays, and a file that held only the block is deleted. In a terminal it lists the files and asks. `--yes` does not ask, `--dry-run` lists each file with what would be done and changes nothing, and `--agent` and `--scope` limit it as they do for `son init`; with neither, it looks at every agent, in the global scope and in the current project. Some agents share one file (`AGENTS.md`, `.agents/skills`), so removing it for one removes it for all of them. A file whose marks are broken is left as it is and reported, and the command then ends with `uninstall_failed`.
+
+It does not touch the database: your memory stays at `~/.son-of-w/son.db`, and you delete that file by hand if you want it gone. It does not remove the `son` program: do that with the tool you installed it with.
+
 ### Memory is reference, not instruction
 
 Both files tell the agent when to read from `son`, when to write to it, and this rule:
@@ -269,6 +279,7 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 
 ```
 son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
+son uninstall [--agent a,b] [--scope global|project] [--yes] [--dry-run]   remove what init wrote
 son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b] [--link <id>:<relation>]
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
                               [--check]                    save nothing; list possible duplicates
@@ -352,6 +363,7 @@ With `--json`, a command that succeeds writes its result to stdout. A command th
 | `import_failed` | The file is not a `son` export, is of a version this `son` does not read, or holds a record that is not valid. Nothing was imported |
 | `install_failed` | `son init` could not write all files. Its report on stdout is still complete |
 | `possible_secret` | The text looks like it holds a secret. Nothing was saved. Take the secret out, or add `--allow-secret` if it is not one |
+| `uninstall_failed` | `son uninstall` left a file as it was. Its report on stdout is still complete |
 | `broken_block` | An instruction file holds `son` marks that do not make exactly one block. `son init` changed nothing. Repair the file by hand |
 | `io_error` | A file could not be read or written |
 | `not_empty` | A backup was not restored because the database holds data and `--replace` was not given |

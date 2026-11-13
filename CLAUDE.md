@@ -36,6 +36,7 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage. 
 - `src/history.rs` — change history: what each command changed, and undo
 - `src/agents.rs` — the table of AI agents: skills folders, instruction files, detection
 - `src/setup.rs` — `son init`: choose agents and scope, then install
+- `src/uninstall.rs` — `son uninstall`: remove the skill files and the instruction blocks
 - `src/instructions.rs` — the skill file and the instruction block, and how they are written
 - `src/transfer.rs` — JSON export and import
 - `src/backup.rs` — `son backup`, and restoring a backup through `son import`

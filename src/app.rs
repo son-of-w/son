@@ -44,6 +44,7 @@ struct App {
 fn log_name(command: &Command) -> Option<(&'static str, bool)> {
     Some(match command {
         Command::Init { .. }
+        | Command::Uninstall { .. }
         | Command::Doctor
         | Command::List { .. }
         | Command::Log { .. }
@@ -103,6 +104,28 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", instructions::skill());
             return Ok(());
         }
+    }
+    if let Command::Uninstall {
+        agent,
+        scope,
+        yes,
+        dry_run,
+    } = &cli.command
+    {
+        // No database is opened, made or upgraded: this only removes files.
+        return crate::uninstall::run(
+            &db::path()?,
+            &crate::uninstall::Options {
+                agents: agent.clone(),
+                scope: scope.map(|scope| match scope {
+                    ScopeArg::Global => Scope::Global,
+                    ScopeArg::Project => Scope::Project,
+                }),
+                yes: *yes,
+                dry_run: *dry_run,
+                json: cli.json,
+            },
+        );
     }
     if matches!(cli.command, Command::Doctor) {
         // Doctor looks at the database as it is: it must not be opened in
@@ -426,6 +449,9 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             Ok(())
         }
         Command::Doctor => unreachable!("doctor runs before the database is opened"),
+        Command::Uninstall { .. } => {
+            unreachable!("uninstall runs before the database is opened")
+        }
         Command::Context {
             collection: project,
             max_chars,
