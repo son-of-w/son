@@ -76,9 +76,52 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # The Mac binaries are signed and notarized, so macOS runs a copy that
+      # was downloaded in a browser. The certificate goes into a keychain that
+      # exists only for this job. Secrets (set with `gh secret set`):
+      #   MACOS_CERT_P12        the Developer ID Application certificate and
+      #                         its key, exported as .p12, then base64
+      #   MACOS_CERT_PASSWORD   the password of that .p12
+      #   NOTARY_KEY_P8         the App Store Connect API key file (.p8)
+      #   NOTARY_KEY_ID, NOTARY_ISSUER_ID   its key id and issuer id
+      - name: Set up signing
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ] || [ -z "$NOTARY_KEY_P8" ]; then
+            echo "The signing secrets are not set; see the comment above this step." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          # Apple's intermediate certificate, which the .p12 does not hold.
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          # Let codesign use the key without a prompt.
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          printf '%s\n' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          echo "SON_NOTARY_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+
       - name: Build and package
         env:
           SON_TARGETS: ${{ matrix.targets }}
+          SON_REQUIRE_SIGNING: "true"
+          SON_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          SON_NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
         run: bash scripts/release.sh package
 
       - name: Upload to the draft

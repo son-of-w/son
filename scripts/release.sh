@@ -20,6 +20,17 @@
 # A target that needs another system is built with cargo-zigbuild when that
 # is installed, and is otherwise left out with a note.
 #
+# Mac binaries are signed with the Developer ID Application certificate in the
+# keychain and sent to Apple for notarization, so that macOS runs a copy that
+# was downloaded in a browser. This needs:
+#   SON_SIGN_IDENTITY     the certificate's name (default: "Developer ID Application")
+#   SON_NOTARY_KEY_ID     the App Store Connect API key id (or ASC_KEY_ID, ASC_API_KEY_ID)
+#   SON_NOTARY_ISSUER     its issuer id (or ASC_ISSUER_ID, ASC_API_ISSUER_ID)
+#   SON_NOTARY_KEY        the key file (default:
+#                         ~/.appstoreconnect/private_keys/AuthKey_<key id>.p8)
+# When one is missing, the Mac binaries are packaged as they are, with a note.
+# With SON_REQUIRE_SIGNING=true (the Release workflow sets it) that is an error.
+#
 # The release is for the tag v<version>. The binaries are always built from
 # the tagged commit: if the tag already exists and is not the commit you are
 # on, they are built from a temporary copy of the tagged commit.
@@ -101,6 +112,52 @@ builder_for() {
   esac
 }
 
+# A Mac binary could not be signed or notarized: stop, or go on with a note.
+not_signed() {
+  [ "${SON_REQUIRE_SIGNING:-false}" != "true" ] || die "cannot sign the Mac binary: $*"
+  say "NOT signed and notarized: $*. macOS will stop a copy downloaded in a browser."
+}
+
+# Sign a Mac binary and have Apple notarize it. A single binary cannot carry
+# the notarization ticket (only an app, a package or a disk image can), so
+# macOS asks Apple for it the first time the binary runs.
+sign_mac() {
+  local binary="$1" identity key_id issuer key work result
+  identity="${SON_SIGN_IDENTITY:-Developer ID Application}"
+  key_id="${SON_NOTARY_KEY_ID:-${ASC_KEY_ID:-${ASC_API_KEY_ID:-}}}"
+  issuer="${SON_NOTARY_ISSUER:-${ASC_ISSUER_ID:-${ASC_API_ISSUER_ID:-}}}"
+  key="${SON_NOTARY_KEY:-$HOME/.appstoreconnect/private_keys/AuthKey_$key_id.p8}"
+
+  if [ "$SYSTEM" != Darwin ]; then
+    not_signed "signing needs a Mac"
+    return
+  fi
+  if ! security find-identity -v -p codesigning | grep -q "\"$identity"; then
+    not_signed "the keychain has no '$identity' certificate"
+    return
+  fi
+  if [ -z "$key_id" ] || [ -z "$issuer" ] || [ ! -f "$key" ]; then
+    not_signed "the App Store Connect API key for notarization is not set"
+    return
+  fi
+
+  say "Signing $(basename "$(dirname "$(dirname "$binary")")")"
+  # The hardened runtime and a timestamp are both required for notarization.
+  codesign --force --timestamp --options runtime --sign "$identity" "$binary"
+  codesign --verify --strict "$binary"
+
+  say "Sending it to Apple for notarization (a few minutes)"
+  work="$(mktemp -d)"
+  ditto -c -k "$binary" "$work/son.zip"
+  result="$(xcrun notarytool submit "$work/son.zip" \
+    --key "$key" --key-id "$key_id" --issuer "$issuer" --wait 2>&1)" || true
+  rm -rf "$work"
+  printf '%s\n' "$result" | grep -E '^ *(id|status):' | tail -2
+  printf '%s\n' "$result" | grep -q 'status: Accepted' ||
+    die "Apple did not accept the binary for notarization:
+$result"
+}
+
 check() {
   say "Checking (format, clippy, tests)"
   make check
@@ -155,6 +212,9 @@ package() {
         fi
         ;;
       *)
+        case "$target" in
+          *-apple-darwin) sign_mac "$ROOT/target/$target/release/son" ;;
+        esac
         tar -czf "$DIST/son-$TAG-$target.tar.gz" -C "$ROOT/target/$target/release" son
         ;;
     esac
@@ -272,7 +332,7 @@ case "${1:-all}" in
     publish
     ;;
   *)
-    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

@@ -354,6 +354,8 @@ It runs the checks, builds the binaries from the tagged commit, creates and push
 
 A local release holds only the binaries your machine can build. A Mac builds both Mac binaries. It can also build the Linux binaries if [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) is installed and you run `SON_TARGETS=all make publish`. The Windows binary can only be built on Windows.
 
+The Mac binaries are signed with a Developer ID Application certificate and notarized by Apple, so macOS runs a copy that was downloaded in a browser. On your own machine the script takes the certificate from your keychain and an App Store Connect API key from `SON_NOTARY_KEY_ID`, `SON_NOTARY_ISSUER` and `SON_NOTARY_KEY` (or `ASC_KEY_ID` and `ASC_ISSUER_ID`, with the key file in `~/.appstoreconnect/private_keys/`). Without them it packages the Mac binaries unsigned and says so. The Release workflow takes the same from repository secrets, which are listed in [release.yml](.github/workflows/release.yml), and fails before anything is public if they are missing.
+
 ## License
 
 `son` is free and open source under the [MIT license](LICENSE). Copyright © 2026 Xon Designs LLC.
