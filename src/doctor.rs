@@ -437,55 +437,107 @@ fn index_check(conn: &Connection) -> Check {
     }
 }
 
-/// The files `son init` wrote: are they what this son would write now?
-fn file_checks(checks: &mut Vec<Check>) {
+/// What a file that `son init` wrote is like now.
+pub enum FileState {
+    /// It is what this son writes.
+    Current,
+    /// It was written by another version of son. `son init` brings it up
+    /// to date.
+    Stale,
+    /// Its marks do not make one block; the text says what is wrong.
+    /// `son init` refuses to change it.
+    Broken(String),
+}
+
+/// Every file here that holds a son skill or a son block, global and for
+/// the current project, with its state. One meaning of "out of date" for
+/// `son doctor` and for the warning in `son context`.
+pub fn agent_files() -> Vec<(std::path::PathBuf, bool, FileState)> {
     let root = std::env::current_dir()
         .map(|cwd| project::root(&cwd))
         .unwrap_or_default();
-    let mut found = 0;
-    for (path, is_skill) in agents::candidate_files(&root) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if !instructions::is_installed_in(&text) {
-            continue;
+    agents::candidate_files(&root)
+        .into_iter()
+        .filter_map(|(path, is_skill)| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            if !instructions::is_installed_in(&text) {
+                return None;
+            }
+            let state = if is_skill {
+                if text == instructions::skill() {
+                    FileState::Current
+                } else {
+                    FileState::Stale
+                }
+            } else {
+                match instructions::find_block(&text) {
+                    Err(fault) => FileState::Broken(fault),
+                    Ok(_) if text.contains(&instructions::block()) => FileState::Current,
+                    Ok(_) => FileState::Stale,
+                }
+            };
+            Some((path, is_skill, state))
+        })
+        .collect()
+}
+
+/// What `son context` says when the agent files need the user: nothing
+/// when all are current. The lines tell the agent to tell the user; an
+/// agent must not change the user's setup by itself.
+pub fn setup_warnings() -> Vec<String> {
+    let files = agent_files();
+    let mut lines = Vec::new();
+    let stale: Vec<String> = files
+        .iter()
+        .filter(|(_, _, state)| matches!(state, FileState::Stale))
+        .map(|(path, _, _)| crate::setup::short_path(path))
+        .collect();
+    if !stale.is_empty() {
+        lines.push(format!(
+            "The son files for agents are from another version of son: {}. \
+             Tell the user to run `son init`. Do not run it yourself.",
+            stale.join(", ")
+        ));
+    }
+    for (path, _, state) in &files {
+        if let FileState::Broken(fault) = state {
+            lines.push(format!(
+                "The son block in {} is broken: it has {fault}. \
+                 Tell the user to run `son doctor` and to repair the file by hand.",
+                crate::setup::short_path(path)
+            ));
         }
-        found += 1;
-        let shown = crate::setup::short_path(&path);
-        let name = if is_skill {
+    }
+    lines
+}
+
+/// The files `son init` wrote: are they what this son would write now?
+fn file_checks(checks: &mut Vec<Check>) {
+    let files = agent_files();
+    for (path, is_skill, state) in &files {
+        let shown = crate::setup::short_path(path);
+        let name = if *is_skill {
             "skill file"
         } else {
             "instruction file"
         };
-        let current = if is_skill {
-            text == instructions::skill()
-        } else {
-            text.contains(&instructions::block())
-        };
-        let fault = if is_skill {
-            None
-        } else {
-            instructions::find_block(&text).err()
-        };
-        checks.push(if let Some(fault) = fault {
-            check(
+        checks.push(match state {
+            FileState::Broken(fault) => check(
                 name,
                 Status::Problem,
                 format!("{shown} has {fault}. `son init` refuses to change this file"),
                 Some(instructions::REPAIR),
-            )
-        } else if current {
-            check(name, Status::Healthy, shown, None)
-        } else {
-            check(
+            ),
+            FileState::Current => check(name, Status::Healthy, shown, None),
+            FileState::Stale => check(
                 name,
                 Status::Stale,
                 format!("{shown} was written by another version of son"),
                 Some("son init"),
-            )
+            ),
         });
     }
-    if found == 0 {
+    if files.is_empty() {
         checks.push(check(
             "agent setup",
             Status::Missing,

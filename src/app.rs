@@ -1759,16 +1759,21 @@ impl App {
     fn context(&self, project: Option<&str>, max_chars: Option<usize>) -> Result<()> {
         let name = project_name(project)?;
         self.note(|draft| draft.project = Some(name.clone()));
+        // Are the agent files from another version of son, or broken? The
+        // agent reads the context at the start of a session, so this is
+        // where the user can be told.
+        let warnings = crate::doctor::setup_warnings();
         let Some(project_id) = store::find_project(&self.conn, &name)? else {
             let text = if self.json {
                 render::json_text(
-                    &json!({ "collection": null, "name": name }),
+                    &json!({ "collection": null, "name": name, "setup_warnings": warnings }),
                     max_chars.is_some(),
                 )
             } else {
                 format!(
-                    "# Context: {name}\n\nNothing is stored for this collection yet.\n\
-                     `son recall <terms>` still searches every other collection.\n"
+                    "# Context: {name}\n{}\nNothing is stored for this collection yet.\n\
+                     `son recall <terms>` still searches every other collection.\n",
+                    render::setup_section(&warnings)
                 )
             };
             print!("{}", render::within(text, max_chars)?);
@@ -1802,6 +1807,7 @@ impl App {
                 facts: of_kind("fact", CONTEXT_SECTION_LIMIT)?,
                 todos,
                 notes: of_kind("note", CONTEXT_NOTES_LIMIT)?,
+                warnings,
             },
             self.json,
             max_chars,

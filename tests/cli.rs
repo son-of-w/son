@@ -2375,6 +2375,86 @@ fn an_import_carries_stale_marks_and_verification_both_ways() {
     assert!(now["verified_at"].is_null());
 }
 
+#[test]
+fn context_says_when_the_agent_files_need_the_user() {
+    let sb = Sandbox::new("setup-warning");
+    let home = sb.root.join("home");
+    let skill = home.join(".claude/skills/son/SKILL.md");
+    let rules = home.join(".claude/CLAUDE.md");
+    sb.ok(
+        "alpha",
+        &["remember", "fact", "A stored fact", "--body", "with a body"],
+    );
+    let warnings = |args: &[&str]| -> Vec<String> {
+        let mut full = vec!["--json", "context"];
+        full.extend(args);
+        sb.ok("alpha", &full).json()["setup_warnings"]
+            .as_array()
+            .expect("the field is always there")
+            .iter()
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // No agent is set up, and then one is, with current files: no line.
+    assert!(warnings(&[]).is_empty());
+    assert!(!sb.ok("alpha", &["context"]).stdout.contains("Setup"));
+    sb.ok("alpha", &INIT_CLAUDE);
+    assert!(warnings(&[]).is_empty());
+    assert!(!sb.ok("alpha", &["context"]).stdout.contains("Setup"));
+
+    // Files from another version: one line that names them and `son init`.
+    let good_rules = std::fs::read_to_string(&rules).unwrap();
+    std::fs::write(&skill, "---\nname: son\n---\n# son: shared memory\nold\n").unwrap();
+    std::fs::write(&rules, good_rules.replace("son recall", "son rekall")).unwrap();
+    let found = warnings(&[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("~/.claude/skills/son/SKILL.md"));
+    assert!(found[0].contains("~/.claude/CLAUDE.md"));
+    assert!(found[0].contains("Tell the user to run `son init`"));
+    let text = sb.ok("alpha", &["context"]).stdout;
+    assert!(
+        position(&text, "## Setup needs the user") < position(&text, "## Facts"),
+        "{text}"
+    );
+    assert!(text.contains("from another version of son"));
+    // A collection with nothing stored says it too.
+    assert!(sb
+        .ok("beta", &["context"])
+        .stdout
+        .contains("Tell the user to run `son init`"));
+    assert_eq!(
+        sb.ok("beta", &["--json", "context"]).json()["setup_warnings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // It stays when the answer is cut to a size, and is part of that size.
+    let cut = sb.ok("alpha", &["context", "--max-chars", "330"]).stdout;
+    assert!(cut.chars().count() <= 330);
+    assert!(cut.contains("Tell the user to run `son init`"), "{cut}");
+    assert!(!warnings(&["--max-chars", "600"]).is_empty());
+    // Only context says it.
+    for args in [vec!["recall", "stored"], vec!["list"], vec!["todo", "list"]] {
+        assert!(
+            !sb.ok("alpha", &args).stdout.contains("son init"),
+            "{args:?}"
+        );
+    }
+
+    // `son init` clears it.
+    sb.ok("alpha", &INIT_CLAUDE);
+    assert!(warnings(&[]).is_empty());
+
+    // A broken block: the line names `son doctor`, not `son init`.
+    std::fs::write(&rules, good_rules.split("<!-- son:end -->").next().unwrap()).unwrap();
+    let found = warnings(&[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("a start mark") && found[0].contains("`son doctor`"));
+    assert!(!found[0].contains("son init"));
+}
+
 /// A text of the form of a Stripe live key. Joined at run time, so that
 /// this file holds nothing a secret scanner reads as a real key.
 fn fake_secret() -> String {

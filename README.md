@@ -173,6 +173,8 @@ For each agent it writes two things:
 
 Running it again updates these files in place and never adds them twice.
 
+Run `son init` again after you install a new version of `son`: it upgrades the database and brings these files up to date together. Until you do, `son context` tells the agent, in a short section named "Setup needs the user", that the files are from another version of `son` and that it must tell you to run `son init`; for a block with broken marks it names `son doctor`. Only `son context` says this, once at the start of a session, and only when something is wrong. With `--json` it is the field `setup_warnings`, a list that is empty when all is well. With `--max-chars` the section counts toward the limit and stays until the shortest form of the answer.
+
 The block is the text between the lines `<!-- son:start -->` and `<!-- son:end -->`. `son init` writes to an instruction file only when it has exactly one such block or no mark at all. If a mark is missing, in the wrong order or there twice, `son init` checks every file first, changes none, and names the file and the lines; `son doctor` reports the same. It does not repair the file, because it cannot tell which text is yours: keep one start line with one end line after it, or delete both, and run `son init` again. Each file is replaced in one step, so a write that fails leaves the old file whole. A file that is a symbolic link stays a link, and the file behind it is changed.
 
 To skip the questions (an agent or a script has to):

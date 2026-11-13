@@ -730,6 +730,8 @@ pub struct Context<'a> {
     pub decisions: Vec<Node>,
     pub facts: Vec<Node>,
     pub todos: Vec<Node>,
+    /// What is wrong with the agent setup, for the user. Empty as a rule.
+    pub warnings: Vec<String>,
     pub notes: Vec<Node>,
 }
 
@@ -781,6 +783,16 @@ fn context_sections<'a>(ctx: &'a Context) -> [(&'static str, &'static str, &'a [
     ]
 }
 
+/// The warnings about the agent setup as a markdown section; empty when
+/// there are none.
+pub fn setup_section(warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = warnings.iter().map(|w| format!("- {w}")).collect();
+    format!("\n## Setup needs the user\n{}\n", lines.join("\n"))
+}
+
 fn context_markdown(ctx: &Context, shape: &ContextShape) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -790,6 +802,7 @@ fn context_markdown(ctx: &Context, shape: &ContextShape) -> String {
         return out;
     }
     let _ = writeln!(out, "# Context: {}", ctx.project.title);
+    out.push_str(&setup_section(&ctx.warnings));
     if shape.bare {
         let counts: Vec<String> = sections
             .iter()
@@ -913,12 +926,14 @@ fn context_json(ctx: &Context, shape: &ContextShape) -> Value {
         for (name, _, nodes) in sections {
             value[name] = nodes_json(nodes);
         }
+        value["setup_warnings"] = json!(ctx.warnings);
         return value;
     }
     if shape.minimal {
         return json!({ "collection": ctx.project.title, "truncated": true });
     }
     let mut value = json!({ "collection": brief_json(ctx.project) });
+    value["setup_warnings"] = json!(ctx.warnings);
     let mut cut = false;
     let mut left_out = 0;
     for (name, _, nodes) in sections {
