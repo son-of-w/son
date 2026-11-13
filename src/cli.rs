@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "son",
     version,
-    about = "Local second brain for Claude sessions",
+    about = "One memory for every AI agent",
     long_about = "son stores decisions, patterns, facts, notes and todos in one local SQLite file \
 and finds them again from anywhere. Every node belongs to a collection: a code repository, \
 or any other group such as \"household\". Recall searches all collections and lists the \

@@ -1,4 +1,4 @@
-//! son: a local second brain for Claude sessions. See README.md for usage.
+//! son: one local memory for every AI agent. See README.md for usage.
 
 pub mod activity;
 pub mod agents;
