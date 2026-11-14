@@ -174,13 +174,14 @@ fn error_codes_stay() {
     let mut codes: Vec<&str> = son_of_w::error::CODES.to_vec();
     codes.sort();
     pinned("error-codes.txt", &format!("{}\n", codes.join("\n")));
-    // Each one is in the table of the README.
+    // Each one is in the table of the reference.
     let readme =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/reference.md"))
+            .unwrap();
     for code in codes {
         assert!(
             readme.contains(&format!("| `{code}` |")),
-            "the error code {code} is not in the README table"
+            "the error code {code} is not in the table of docs/reference.md"
         );
     }
 }
@@ -207,11 +208,12 @@ fn environment_variables_stay() {
     let names: Vec<String> = names.into_iter().collect();
     pinned("environment.txt", &format!("{}\n", names.join("\n")));
     let readme =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/reference.md"))
+            .unwrap();
     for name in names {
         assert!(
             readme.contains(&format!("`{name}")),
-            "the variable {name} is not in the README"
+            "the variable {name} is not in docs/reference.md"
         );
     }
 }
