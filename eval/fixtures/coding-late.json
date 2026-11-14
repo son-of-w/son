@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "exported_at": "2026-11-11T00:00:00.000Z",
+  "nodes": [
+    {
+      "id": "01JEVALC000000000000COLL01",
+      "type": "collection",
+      "title": "tidepool-api",
+      "created_at": "2026-04-01T00:00:00.000Z",
+      "updated_at": "2026-04-01T00:00:00.000Z"
+    },
+    {
+      "id": "01JEVALC000000000000FACT02",
+      "type": "fact",
+      "title": "The service binds to 127.0.0.1",
+      "body": "The service only accepts connections from the same machine: host is 127.0.0.1.",
+      "tags": [
+        "host",
+        "config"
+      ],
+      "evidence": "observation",
+      "refs": [
+        {
+          "kind": "file",
+          "value": "config/server.toml"
+        }
+      ],
+      "created_at": "2026-04-01T00:00:00.000Z",
+      "updated_at": "2026-04-01T00:00:00.000Z",
+      "collection_id": "01JEVALC000000000000COLL01"
+    }
+  ]
+}

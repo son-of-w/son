@@ -1,0 +1,3 @@
+2026-02-10  We keep images under 200 KB each. Larger ones made the home page slow.
+2026-03-02  Still to do: add an RSS feed for the news pages.
+2026-03-02  Lunch order for the team meeting: two vegetarian, one with no nuts.
