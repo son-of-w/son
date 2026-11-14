@@ -75,18 +75,6 @@ pub struct Filter<'a> {
     pub tags: &'a [String],
 }
 
-/// True when the two nodes have a link between them, in either direction.
-/// A link says someone already looked at the pair: they are related, or
-/// one replaces the other, so they are not listed as duplicates.
-fn linked(conn: &Connection, a: &str, b: &str) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM edges WHERE (from_id = ?1 AND to_id = ?2) \
-                                               OR (from_id = ?2 AND to_id = ?1))",
-        params![a, b],
-        |r| r.get(0),
-    )?)
-}
-
 /// Every node that needs attention, most pressing first: stale, then
 /// possible duplicates, then the longest overdue.
 pub fn items(
@@ -125,6 +113,21 @@ pub fn items(
             },
         )?
         .collect::<rusqlite::Result<_>>()?;
+
+    // What each node may duplicate, for all nodes in one pass. Asking the
+    // search index once for each node took seconds on a large database.
+    let mut duplicates = search::all_duplicates(conn, an, 3)?;
+    // Every link. A link between two nodes says someone already looked
+    // at the pair: they are related, or one replaces the other, so they
+    // are not listed as duplicates.
+    let links: std::collections::HashSet<(String, String)> = conn
+        .prepare("SELECT from_id, to_id FROM edges")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let linked = |a: &str, b: &str| {
+        links.contains(&(a.to_string(), b.to_string()))
+            || links.contains(&(b.to_string(), a.to_string()))
+    };
 
     let mut found: Vec<(u8, f64, Item)> = Vec::new();
     for (node, unverified_days, age_days, superseded) in rows {
@@ -188,16 +191,8 @@ pub fn items(
         // Each pair once: on the newer node, pointing at the older one.
         let closed_todo = node.kind == "todo" && node.status.as_deref() != Some("open");
         if !superseded && !closed_todo {
-            for candidate in search::duplicates(
-                conn,
-                an,
-                &node.title,
-                &node.body,
-                &node.kind,
-                Some(&node.id),
-                3,
-            )? {
-                if candidate.node.id < node.id && !linked(conn, &node.id, &candidate.node.id)? {
+            for candidate in duplicates.remove(&node.id).unwrap_or_default() {
+                if candidate.node.id < node.id && !linked(&node.id, &candidate.node.id) {
                     rank = rank.min(1);
                     reasons.push(Reason {
                         code: "possible_duplicate",

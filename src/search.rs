@@ -12,7 +12,7 @@ use crate::store::{self, Node, COLS, NCOLS};
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// BM25 column weights: title counts most, then tags, then body.
 const WEIGHTS: &str = "0.0, 10.0, 5.0, 1.0";
@@ -425,6 +425,15 @@ fn shared<'a>(a: &'a [String], b: &[String]) -> Vec<&'a str> {
         .collect()
 }
 
+/// One side of a comparison: the text of a node, and its words.
+struct Side<'a> {
+    title: &'a str,
+    body: &'a str,
+    kind: &'a str,
+    title_words: &'a [String],
+    body_words: &'a [String],
+}
+
 /// How alike a new node (`title`, `body`, `kind`) and a stored one are, with
 /// the reasons. Only words are compared: the same words in the title, then
 /// in the body. This finds candidates; it does not decide that two nodes
@@ -436,38 +445,68 @@ pub fn likeness(
     kind: &str,
     node: &Node,
 ) -> (f64, Vec<String>) {
-    let mut reasons = Vec::new();
-    let (new_title, old_title) = (word_set(an, title), word_set(an, &node.title));
-    let common = shared(&new_title, &old_title);
-    let union = new_title.len() + old_title.len() - common.len();
-    let smaller = new_title.len().min(old_title.len());
-    let mut score = if title.trim().eq_ignore_ascii_case(node.title.trim()) {
-        reasons.push("same title".to_string());
+    likeness_of(
+        &Side {
+            title,
+            body,
+            kind,
+            title_words: &word_set(an, title),
+            body_words: &word_set(an, body),
+        },
+        &Side {
+            title: &node.title,
+            body: &node.body,
+            kind: &node.kind,
+            title_words: &word_set(an, &node.title),
+            body_words: &word_set(an, &node.body),
+        },
+    )
+}
+
+/// The score a pair of titles gets from their words alone: the first step
+/// of [`likeness_of`]. `common` is how many words they share.
+fn title_score(same_title: bool, common: usize, new_words: usize, old_words: usize) -> f64 {
+    let union = new_words + old_words - common;
+    if same_title {
         1.0
-    } else if common.is_empty() || union == 0 {
+    } else if common == 0 || union == 0 {
         0.0
     } else {
-        let jaccard = common.len() as f64 / union as f64;
+        let jaccard = common as f64 / union as f64;
         // One title that holds all the words of the other, when there are
         // at least two such words.
-        let contained = if smaller >= 2 && common.len() == smaller {
+        let smaller = new_words.min(old_words);
+        let contained = if smaller >= 2 && common == smaller {
             0.85
         } else {
             0.0
         };
+        jaccard.max(contained)
+    }
+}
+
+fn likeness_of(new: &Side, old: &Side) -> (f64, Vec<String>) {
+    let mut reasons = Vec::new();
+    let (new_title, old_title) = (new.title_words, old.title_words);
+    let common = shared(new_title, old_title);
+    let union = new_title.len() + old_title.len() - common.len();
+    let same_title = new.title.trim().eq_ignore_ascii_case(old.title.trim());
+    let mut score = title_score(same_title, common.len(), new_title.len(), old_title.len());
+    if same_title {
+        reasons.push("same title".to_string());
+    } else if score > 0.0 {
         reasons.push(format!(
             "title shares {} of {} words: {}",
             common.len(),
             union,
             common.join(", ")
         ));
-        jaccard.max(contained)
-    };
-    let (new_body, old_body) = (word_set(an, body), word_set(an, &node.body));
+    }
+    let (new_body, old_body) = (new.body_words, old.body_words);
     if !new_body.is_empty() && !old_body.is_empty() {
-        let common = shared(&new_body, &old_body).len();
+        let common = shared(new_body, old_body).len();
         let overlap = common as f64 / new_body.len().min(old_body.len()) as f64;
-        if body.trim() == node.body.trim() {
+        if new.body.trim() == old.body.trim() {
             reasons.push("same body".to_string());
             score = score.max(0.9);
         } else if overlap >= 0.6 && score >= 0.3 {
@@ -475,8 +514,8 @@ pub fn likeness(
             score = score.max(0.3 + 0.5 * overlap);
         }
     }
-    if node.kind != kind {
-        reasons.push(format!("different type ({})", node.kind));
+    if old.kind != new.kind {
+        reasons.push(format!("different type ({})", old.kind));
         score *= 0.8;
     }
     (score.min(1.0), reasons)
@@ -527,6 +566,166 @@ pub fn duplicates(
     });
     found.truncate(limit);
     Ok(found)
+}
+/// For every stored node, the stored nodes it may duplicate: what
+/// [`duplicates`] gives for each node, found in one pass.
+///
+/// [`duplicates`] asks the search index once for each node, which is slow
+/// for a review of thousands of nodes. This reads all nodes once and keeps
+/// an index of title words in memory. Two nodes can only be alike enough
+/// when they share a title word, have the same title, or have the same
+/// body, so only such pairs are compared, with the same [`likeness`].
+///
+/// One difference: [`duplicates`] looks at the 50 best matches of the
+/// search index for each node. This looks at every pair, so in a database
+/// where a title's words match more than 50 nodes it can find a duplicate
+/// that the other misses.
+pub fn all_duplicates(
+    conn: &Connection,
+    an: &Analyzer,
+    limit: usize,
+) -> Result<HashMap<String, Vec<Candidate>>> {
+    let synonyms = store::synonyms(conn)?;
+    let nodes: Vec<Node> = store::list_nodes(conn, None, None, false)?
+        .into_iter()
+        .filter(|node| node.kind != "collection")
+        .collect();
+    let titles: Vec<Vec<String>> = nodes.iter().map(|n| word_set(an, &n.title)).collect();
+    // The words of a body, and all the words the search index holds for a
+    // node, are worked out only for the nodes that need them.
+    let mut bodies: Vec<Option<Vec<String>>> = vec![None; nodes.len()];
+    let mut indexed: Vec<Option<HashSet<String>>> = vec![None; nodes.len()];
+
+    // Pairs worth a comparison, each once, as (earlier, later) positions.
+    let mut by_word: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut by_title: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_body: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut found: Vec<Vec<(usize, f64, Vec<String>)>> = vec![Vec::new(); nodes.len()];
+    // How many title words each earlier node shares with this one. A
+    // plain list of counts with a list of the places that were touched:
+    // this loop runs for every pair that shares a word, so it must be cheap.
+    const SEEN: u32 = 1 << 31;
+    let mut counts: Vec<u32> = vec![0; nodes.len()];
+    let mut touched: Vec<usize> = Vec::new();
+    for (at, node) in nodes.iter().enumerate() {
+        for place in touched.drain(..) {
+            counts[place] = 0;
+        }
+        let mut touch = |counts: &mut Vec<u32>, other: usize, add: u32| {
+            if counts[other] == 0 {
+                touched.push(other);
+            }
+            counts[other] = (counts[other] + add) | SEEN;
+        };
+        for word in &titles[at] {
+            if let Some(earlier) = by_word.get(word.as_str()) {
+                for other in earlier {
+                    touch(&mut counts, *other, 1);
+                }
+            }
+        }
+        let same_title = node.title.trim().to_ascii_lowercase();
+        let same_body = node.body.trim();
+        for other in by_title.get(&same_title).into_iter().flatten() {
+            touch(&mut counts, *other, 0);
+        }
+        if !same_body.is_empty() {
+            for other in by_body.get(same_body).into_iter().flatten() {
+                touch(&mut counts, *other, 0);
+            }
+        }
+        for &other in &touched {
+            let shared_words = (counts[other] & !SEEN) as usize;
+            let old = &nodes[other];
+            let titles_equal = old.title.trim().eq_ignore_ascii_case(node.title.trim());
+            let bodies_equal = !same_body.is_empty() && old.body.trim() == same_body;
+            // The body can only add to a title score of 0.3 or more, and
+            // a pair is listed from 0.5: leave the others out early.
+            let from_title = title_score(
+                titles_equal,
+                shared_words,
+                titles[at].len(),
+                titles[other].len(),
+            );
+            if from_title < 0.3 && !bodies_equal {
+                continue;
+            }
+            for position in [at, other] {
+                if bodies[position].is_none() {
+                    bodies[position] = Some(word_set(an, &nodes[position].body));
+                }
+            }
+            let side = |position: usize| Side {
+                title: &nodes[position].title,
+                body: &nodes[position].body,
+                kind: &nodes[position].kind,
+                title_words: &titles[position],
+                body_words: bodies[position].as_deref().unwrap_or_default(),
+            };
+            // The score is the same from both sides; the words of the
+            // reasons are not (they name the other node's type).
+            let (score, reasons) = likeness_of(&side(at), &side(other));
+            if score < DUPLICATE_THRESHOLD {
+                continue;
+            }
+            let (_, reasons_back) = likeness_of(&side(other), &side(at));
+            // With no shared title word, the search index finds the other
+            // node only when a word of this title is somewhere in it.
+            let mut reaches = |from: usize, to: usize| -> bool {
+                if shared_words > 0 {
+                    return true;
+                }
+                let terms = an.query(&nodes[from].title, &synonyms).terms;
+                let words = indexed[to].get_or_insert_with(|| {
+                    let tags = nodes[to].tags.join(" ");
+                    [
+                        nodes[to].title.as_str(),
+                        tags.as_str(),
+                        nodes[to].body.as_str(),
+                    ]
+                    .iter()
+                    .flat_map(|text| an.tokens(text))
+                    .collect()
+                });
+                terms.iter().any(|term| words.contains(term))
+            };
+            if reaches(at, other) {
+                found[at].push((other, score, reasons));
+            }
+            if reaches(other, at) {
+                found[other].push((at, score, reasons_back));
+            }
+        }
+        for word in &titles[at] {
+            by_word.entry(word.as_str()).or_default().push(at);
+        }
+        by_title.entry(same_title).or_default().push(at);
+        if !same_body.is_empty() {
+            by_body.entry(same_body).or_default().push(at);
+        }
+    }
+
+    let mut all = HashMap::new();
+    for (at, mut list) in found.into_iter().enumerate() {
+        if list.is_empty() {
+            continue;
+        }
+        list.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then_with(|| nodes[b.0].id.cmp(&nodes[a.0].id))
+        });
+        list.truncate(limit);
+        let candidates = list
+            .into_iter()
+            .map(|(other, score, reasons)| Candidate {
+                node: nodes[other].clone(),
+                score,
+                reasons,
+            })
+            .collect();
+        all.insert(nodes[at].id.clone(), candidates);
+    }
+    Ok(all)
 }
 
 /// Stored words that are a typo away from `stem`. Only for a word the index
