@@ -6,6 +6,12 @@ description = "One memory for every AI agent: a local store of decisions, patter
 homepage = "https://son-of-w.com"
 repository = "https://github.com/son-of-w/son"
 license = "MIT"
+readme = "README.md"
+keywords = ["ai", "agents", "memory", "cli", "sqlite"]
+categories = ["command-line-utilities", "development-tools"]
+# What `cargo install son-of-w` needs: the source and the tests. The
+# evaluation kit, the artwork and the release scripts stay in the repository.
+exclude = ["/assets", "/eval", "/dist", "/scripts", "/.github", "/CLAUDE.md"]
 
 [[bin]]
 name = "son"

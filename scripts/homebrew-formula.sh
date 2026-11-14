@@ -6,7 +6,8 @@
 # The formula installs the binary that the release holds for the Mac's
 # processor (Apple silicon or Intel) and for Linux, with the checksums from
 # the release's SHA256SUMS file. It does not run `son init`.
-# Put the output in a tap as Formula/son.rb (see todo #12).
+# The tap is the repository son-of-w/homebrew-tap; the output goes there as
+# Formula/son.rb, and users install with `brew install son-of-w/tap/son`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:-$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)}"
@@ -23,10 +24,10 @@ sum() {
 base="https://github.com/$repo/releases/download/$tag/son-$tag"
 cat <<FORMULA
 class Son < Formula
-  desc "Local shared memory for AI agents: one binary, one SQLite file"
-  homepage "https://github.com/$repo"
+  desc "One memory for every AI agent: one binary, one SQLite file"
+  homepage "https://son-of-w.com"
   version "$version"
-  license :cannot_represent
+  license "MIT"
 
   on_macos do
     on_arm do
@@ -52,12 +53,17 @@ class Son < Formula
 
   def install
     bin.install "son"
+    generate_completions_from_executable(bin/"son", "completions")
   end
 
   def caveats
     <<~EOS
       Run \`son init\` to set son up for your AI agents.
-      Installing son does not change any agent's files.
+      After an upgrade, run \`son init\` again: it upgrades the database
+      and brings the agent files up to date.
+      Installing or removing son with brew does not change any agent's
+      files and does not touch your memory (~/.son-of-w). To take son out
+      of your agents' files, run \`son uninstall\` before \`brew uninstall son\`.
     EOS
   end
 

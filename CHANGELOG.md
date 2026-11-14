@@ -20,6 +20,9 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 - `son doctor` has new checks: stored nodes of a form this `son` does not know, stored text that looks like a secret, a database file that other users can read, and the copies made before schema upgrades. A new status, `warning`, does not make `son doctor` fail.
 - New error codes: `broken_block`, `possible_secret`, `upgrade_backup_failed`, `uninstall_failed`.
 - The README states what stays the same in every 1.x release, and tests pin it.
+- Each release holds a `.deb` and an `.rpm` package for Linux on x86-64 and ARM64, beside the archives.
+- Install scripts for macOS and Linux (`scripts/install.sh`) and for Windows (`scripts/install.ps1`): they download the binary of a release, check it against `SHA256SUMS`, and put it on your `PATH`.
+- The release checks itself before it is public: each signed Mac archive is unpacked and its signature and notarization are confirmed, every archive must hold the binary and nothing else, and the released binary must say the version of the release.
 
 ### Changed
 

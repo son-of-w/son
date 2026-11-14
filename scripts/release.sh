@@ -30,6 +30,11 @@
 #                         ~/.appstoreconnect/private_keys/AuthKey_<key id>.p8)
 # When one is missing, the Mac binaries are packaged as they are, with a note.
 # With SON_REQUIRE_SIGNING=true (the Release workflow sets it) that is an error.
+# A signed Mac archive is unpacked again and checked before it is uploaded:
+# the signature must be whole, and Apple must know the notarization.
+#
+# With SON_LINUX_PACKAGES=true (the Release workflow sets it on Linux), a
+# .deb and an .rpm are made from each Linux binary (scripts/linux-packages.sh).
 #
 # The release is for the tag v<version>. The binaries are always built from
 # the tagged commit: if the tag already exists and is not the commit you are
@@ -141,6 +146,7 @@ sign_mac() {
     return
   fi
 
+  MAC_SIGNED=true
   say "Signing $(basename "$(dirname "$(dirname "$binary")")")"
   # The hardened runtime and a timestamp are both required for notarization.
   codesign --force --timestamp --options runtime --sign "$identity" "$binary"
@@ -156,6 +162,25 @@ sign_mac() {
   printf '%s\n' "$result" | grep -q 'status: Accepted' ||
     die "Apple did not accept the binary for notarization:
 $result"
+}
+
+# Unpack a Mac archive as a user would, and check what is in it: a whole
+# Developer ID signature, and a notarization that Apple confirms. This is
+# what Gatekeeper asks when a copy from a browser is run for the first time.
+# (`spctl --assess` is for apps and refuses every bare program, so it is
+# not the test.)
+verify_mac_archive() {
+  local archive="$1" work
+  work="$(mktemp -d)"
+  tar -xzf "$archive" -C "$work"
+  codesign --verify --strict "$work/son" ||
+    die "the signature of son in $(basename "$archive") is not whole"
+  codesign -dv --verbose=2 "$work/son" 2>&1 | grep -q '^Authority=Developer ID Application' ||
+    die "son in $(basename "$archive") is not signed with a Developer ID Application certificate"
+  codesign --verify --strict -R='notarized' --check-notarization "$work/son" ||
+    die "Apple does not confirm the notarization of son in $(basename "$archive")"
+  rm -rf "$work"
+  say "Checked: $(basename "$archive") is signed and notarized"
 }
 
 check() {
@@ -212,10 +237,18 @@ package() {
         fi
         ;;
       *)
+        MAC_SIGNED=false
         case "$target" in
           *-apple-darwin) sign_mac "$ROOT/target/$target/release/son" ;;
         esac
         tar -czf "$DIST/son-$TAG-$target.tar.gz" -C "$ROOT/target/$target/release" son
+        if [ "$MAC_SIGNED" = true ]; then
+          verify_mac_archive "$DIST/son-$TAG-$target.tar.gz"
+        fi
+        if [[ "$target" == *-linux-musl ]] && [ "${SON_LINUX_PACKAGES:-false}" = "true" ]; then
+          say "Making the .deb and .rpm packages for $target"
+          (cd "$src" && bash scripts/linux-packages.sh "$target" "$ROOT/target/$target/release/son" "$DIST")
+        fi
         ;;
     esac
   done < <(wanted_targets)
@@ -296,6 +329,38 @@ finish() {
       ls "$held"/son-"$TAG"-"$target".* >/dev/null 2>&1 ||
         die "the release $TAG has no archive for $target"
     done
+  fi
+
+  # Before anything is public: every archive unpacks and holds the binary,
+  # and the binary for this machine says the version of the release.
+  local file listed
+  for file in "$held"/son-"$TAG"-*.tar.gz "$held"/son-"$TAG"-*.zip; do
+    [ -f "$file" ] || continue
+    case "$file" in
+      *.zip) listed="$(unzip -Z1 "$file")" ;;
+      *) listed="$(tar -tzf "$file")" ;;
+    esac
+    case "$listed" in
+      son | son.exe) ;;
+      *) die "$(basename "$file") must hold the binary and nothing else, but holds: $listed" ;;
+    esac
+  done
+  local mine=""
+  case "$SYSTEM:$(uname -m)" in
+    Linux:x86_64) mine="x86_64-unknown-linux-musl" ;;
+    Linux:aarch64) mine="aarch64-unknown-linux-musl" ;;
+    Darwin:arm64) mine="aarch64-apple-darwin" ;;
+    Darwin:x86_64) mine="x86_64-apple-darwin" ;;
+  esac
+  if [ -n "$mine" ] && [ -f "$held/son-$TAG-$mine.tar.gz" ]; then
+    local try says
+    try="$(mktemp -d)"
+    tar -xzf "$held/son-$TAG-$mine.tar.gz" -C "$try"
+    says="$("$try/son" --version)" || die "the released binary for $mine does not run"
+    [ "$says" = "son $VERSION" ] ||
+      die "the released binary for $mine says '$says', not 'son $VERSION'"
+    rm -rf "$try"
+    say "Checked: the released binary for $mine runs and says '$says'"
   fi
 
   (cd "$held" && sha256 son-"$TAG"-* > SHA256SUMS)

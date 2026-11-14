@@ -53,3 +53,61 @@ jobs:
           name: son-${{ matrix.os }}
           path: target/release/son${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
+
+  # The ways to install son, tried on each system. The installers fetch
+  # the newest public release; the packages are made from this commit.
+  install:
+    name: Install methods (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shell installer
+        if: runner.os != 'Windows'
+        run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          SON_INSTALL_DIR="$RUNNER_TEMP/bin" sh scripts/install.sh
+          "$RUNNER_TEMP/bin/son" --version
+          # A save and a recall, and no agent file was written.
+          SON_DB="$RUNNER_TEMP/son.db" "$RUNNER_TEMP/bin/son" remember note "installed by the script"
+          SON_DB="$RUNNER_TEMP/son.db" "$RUNNER_TEMP/bin/son" recall installed | grep -q "installed by the script"
+          [ ! -e "$HOME/.claude" ] && [ ! -e "$HOME/.son-of-w" ]
+
+      - name: PowerShell installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:SON_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "son-bin"
+          ./scripts/install.ps1
+          $son = Join-Path $env:SON_INSTALL_DIR "son.exe"
+          & $son --version
+          $env:SON_DB = Join-Path $env:RUNNER_TEMP "son.db"
+          & $son remember note "installed by the script"
+          $found = & $son recall installed
+          if (-not ($found -match "installed by the script")) { throw "recall did not find the note" }
+
+      - name: Deb and rpm packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm
+          cargo build --release --locked
+          bash scripts/linux-packages.sh x86_64-unknown-linux-musl target/release/son "$RUNNER_TEMP/packages"
+          ls -l "$RUNNER_TEMP/packages"
+          # The rpm lists the binary and the completion scripts.
+          rpm -qlp "$RUNNER_TEMP"/packages/*.rpm | tee "$RUNNER_TEMP/rpm-files"
+          grep -qx /usr/bin/son "$RUNNER_TEMP/rpm-files"
+          grep -q bash-completion "$RUNNER_TEMP/rpm-files"
+          # Install the deb, use it, and remove it; the memory stays.
+          sudo dpkg -i "$RUNNER_TEMP"/packages/*.deb
+          son --version
+          export SON_DB="$RUNNER_TEMP/packaged.db"
+          son remember note "installed from the deb"
+          son recall deb | grep -q "installed from the deb"
+          test -f /usr/share/bash-completion/completions/son
+          sudo dpkg -r son
+          ! command -v son
+          test -f "$SON_DB"
