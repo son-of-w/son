@@ -1,0 +1,5 @@
+isolated: yes. Each agent starts with an empty environment and HOME=<run>/home.
+From outside: the login of each agent (below), what the account of the login brings
+(for Claude Code: the skills that the account syncs), the agent programs, the network.
+codex login: a link to ~/.codex/auth.json
+codex login after the phase: still a link

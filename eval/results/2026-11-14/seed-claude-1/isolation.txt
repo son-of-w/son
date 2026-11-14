@@ -1,0 +1,4 @@
+isolated: yes. Each agent starts with an empty environment and HOME=<run>/home.
+From outside: the login of each agent (below), what the account of the login brings
+(for Claude Code: the skills that the account syncs), the agent programs, the network.
+claude login: a link to the login keychain of the user (the whole keychain, not one item)
