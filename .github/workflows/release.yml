@@ -113,12 +113,17 @@ jobs:
         run: bash scripts/release.sh finish
 
   # After the release is public: the Homebrew tap, the Scoop bucket and
-  # crates.io. The steps are in channels.yml, which can also be run by
-  # hand for a tag when one of them failed.
+  # crates.io. The steps are in channels.yml. It is started as a workflow
+  # of its own, and not called as a part of this one, because crates.io
+  # trusts a workflow by the file name of the one that was started. Look
+  # at its run under Actions -> Channels; when a step failed there, start
+  # it again: gh workflow run Channels -f tag=<tag>
   channels:
-    name: Channels
+    name: Start the Channels workflow
     needs: publish
-    uses: ./.github/workflows/channels.yml
-    with:
-      tag: ${{ github.ref_name }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start Channels for this tag
+        run: gh workflow run channels.yml -f tag="$TAG"

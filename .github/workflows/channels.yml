@@ -3,18 +3,27 @@ name: Channels
 # Update the package channels for a release that is public: the Homebrew
 # tap, the Scoop bucket and crates.io.
 #
-# The Release workflow calls this after it has published a release. Run it
-# by hand to do the same again for a tag, when a step failed (a token that
-# ran out, a registry that was down):
+# The Release workflow starts this after it has published a release. Run
+# it by hand to do the same again for a tag, when a step failed (a token
+# that ran out, a registry that was down):
 #   gh workflow run Channels -R son-of-w/son -f tag=v1.0.0
 # Each step is safe to run again: the tap and the bucket get a commit only
 # when the file changes, and a version that is on crates.io is left alone.
+#
+# crates.io: this workflow is a trusted publisher of the crate son-of-w
+# (crates.io -> the crate -> Settings -> Trusted Publishing: owner
+# son-of-w, repository son, workflow channels.yml). crates.io gives the
+# job a token that lasts for the job only, so no token is kept here. It
+# trusts the workflow that was started, by its file name: that is why the
+# Release workflow starts this one and does not call it as a part of
+# itself.
 #
 # The secrets, in Settings -> Secrets and variables -> Actions. A step
 # whose secret is not set is left out, and the last step says so.
 #   TAP_TOKEN             a token that can write to son-of-w/homebrew-tap
 #                         and son-of-w/scoop-bucket
-#   CARGO_REGISTRY_TOKEN  a crates.io token that can publish son-of-w
+#   CARGO_REGISTRY_TOKEN  not needed with trusted publishing. When it is
+#                         set, it is used only if crates.io gives no token
 
 on:
   workflow_dispatch:
@@ -23,19 +32,11 @@ on:
         description: "The tag of a public release, for example v1.0.0"
         required: true
         type: string
-  workflow_call:
-    inputs:
-      tag:
-        required: true
-        type: string
-    secrets:
-      TAP_TOKEN:
-        required: false
-      CARGO_REGISTRY_TOKEN:
-        required: false
 
 permissions:
   contents: read
+  # To prove to crates.io which workflow this is.
+  id-token: write
 
 defaults:
   run:
@@ -50,7 +51,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      STORED_CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       # The source of the tag, so that what goes to crates.io is the
       # release and not a later commit.
@@ -88,10 +89,29 @@ jobs:
           git diff --cached --quiet || git commit -m "son $version"
           git push
 
+      # Ask crates.io for a token for this job. It fails when this
+      # workflow is not a trusted publisher of the crate; the next step
+      # then uses the stored token, if there is one.
+      - name: Ask crates.io for a token
+        id: auth
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: crates.io
-        if: env.CARGO_REGISTRY_TOKEN != ''
+        env:
+          TRUSTED_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           version="${TAG#v}"
+          if [ -n "$TRUSTED_TOKEN" ]; then
+            echo "::notice::crates.io gave a token to this workflow (trusted publishing)"
+            export CARGO_REGISTRY_TOKEN="$TRUSTED_TOKEN"
+          elif [ -n "$STORED_CARGO_TOKEN" ]; then
+            echo "::warning::crates.io gave no token to this workflow; the stored CARGO_REGISTRY_TOKEN is used. Check the trusted publisher of the crate"
+            export CARGO_REGISTRY_TOKEN="$STORED_CARGO_TOKEN"
+          else
+            echo "::error::crates.io gave no token to this workflow and CARGO_REGISTRY_TOKEN is not set: nothing can be published to crates.io"
+            exit 1
+          fi
           if curl -fsS -o /dev/null -A "son release workflow" "https://crates.io/api/v1/crates/son-of-w/$version"; then
             echo "::notice::son-of-w $version is on crates.io already; nothing was published"
           else
@@ -102,4 +122,3 @@ jobs:
         if: always()
         run: |
           [ -n "$TAP_TOKEN" ] || echo "::notice::TAP_TOKEN is not set: the Homebrew tap and the Scoop bucket were not updated"
-          [ -n "$CARGO_REGISTRY_TOKEN" ] || echo "::notice::CARGO_REGISTRY_TOKEN is not set: nothing was published to crates.io"
