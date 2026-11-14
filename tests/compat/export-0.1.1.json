@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "exported_at": "2026-11-14T00:08:19.815Z",
+  "nodes": [
+    {
+      "id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "type": "project",
+      "title": "shop",
+      "body": "",
+      "status": null,
+      "project_id": null,
+      "project": null,
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.620Z",
+      "updated_at": "2026-11-14T00:08:19.620Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1
+    },
+    {
+      "id": "01M7BP4CX57G6BCEM0CYWRPGXB",
+      "type": "decision",
+      "title": "Use Postgres for orders",
+      "body": "Chosen over SQLite because two services write.",
+      "status": null,
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [
+        "database",
+        "orders"
+      ],
+      "created_at": "2026-11-14T00:08:19.621Z",
+      "updated_at": "2026-11-14T00:08:19.621Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1
+    },
+    {
+      "id": "01M7BP4CY2G1GJG66SXAAJ8ZAT",
+      "type": "pattern",
+      "title": "Terraform layout for AWS",
+      "body": "One folder per environment.",
+      "status": null,
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [
+        "aws",
+        "terraform"
+      ],
+      "created_at": "2026-11-14T00:08:19.650Z",
+      "updated_at": "2026-11-14T00:08:19.650Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1
+    },
+    {
+      "id": "01M7BP4CZ3D5WV1TFKN0BGE2P0",
+      "type": "fact",
+      "title": "API port is 8443",
+      "body": "Set in config/server.toml, line 3.",
+      "status": null,
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.683Z",
+      "updated_at": "2026-11-14T00:08:19.775Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2
+    },
+    {
+      "id": "01M7BP4CZWT03HN76R16RKYAZ5",
+      "type": "note",
+      "title": "A note that was dropped",
+      "body": "",
+      "status": null,
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.708Z",
+      "updated_at": "2026-11-14T00:08:19.770Z",
+      "deleted_at": "2026-11-14T00:08:19.770Z",
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2
+    },
+    {
+      "id": "01M7BP4D0H875H0KADYEVEJTE5",
+      "type": "todo",
+      "title": "Rotate the staging key",
+      "body": "",
+      "status": "open",
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.729Z",
+      "updated_at": "2026-11-14T00:08:19.729Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1
+    },
+    {
+      "id": "01M7BP4D1B92047WM6ZHNASJE0",
+      "type": "todo",
+      "title": "Write the README",
+      "body": "",
+      "status": "done",
+      "project_id": "01M7BP4CX47BB7NDVE1KD8BCX6",
+      "project": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.755Z",
+      "updated_at": "2026-11-14T00:08:19.761Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2
+    }
+  ],
+  "edges": [
+    {
+      "from_id": "01M7BP4CZ3D5WV1TFKN0BGE2P0",
+      "to_id": "01M7BP4CX57G6BCEM0CYWRPGXB",
+      "relation": "relates_to",
+      "created_at": "2026-11-14T00:08:19.765Z",
+      "origin": "local"
+    }
+  ],
+  "synonyms": [
+    {
+      "term": "auth",
+      "canonical": "authentication"
+    },
+    {
+      "term": "config",
+      "canonical": "configuration"
+    },
+    {
+      "term": "db",
+      "canonical": "database"
+    },
+    {
+      "term": "env",
+      "canonical": "environment"
+    },
+    {
+      "term": "gh",
+      "canonical": "github"
+    },
+    {
+      "term": "infra",
+      "canonical": "infrastructure"
+    },
+    {
+      "term": "js",
+      "canonical": "javascript"
+    },
+    {
+      "term": "k8s",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "kube",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "pg",
+      "canonical": "postgres"
+    },
+    {
+      "term": "pgsql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "postgresql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "py",
+      "canonical": "python"
+    },
+    {
+      "term": "repo",
+      "canonical": "repository"
+    },
+    {
+      "term": "tf",
+      "canonical": "terraform"
+    },
+    {
+      "term": "ts",
+      "canonical": "typescript"
+    }
+  ]
+}

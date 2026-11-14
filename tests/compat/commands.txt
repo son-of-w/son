@@ -1,0 +1,40 @@
+son backup: <destination>
+son collections: 
+son completions: <shell>
+son context: --collection --max-chars
+son doctor: 
+son drop: --purge <id>
+son edit: --body --collection --evidence --priority --ref --status --tag --title --type --unref <id>
+son export: --collection --tag
+son history: --limit --op --page <id>
+son import: --replace <file>
+son init: --agent|-a --db-only --global|-g --list-agents --overwrite-todo-skill --print-block --print-skill --scope --skill-only --todo-skill --todo-skill-name --yes|-y
+son link: <from> <relation> <to>
+son list: --collection --dropped --limit --page --tag --type
+son log: --collection --command --errors --limit --page
+son merge: --body --cross-collection --title <source> <survivor>
+son recall: --collection --explain --hops --limit --max-chars --tag --type <query>
+son reindex: 
+son remember: --body --check --collection --evidence --key --link --ref --tag <kind> <title>
+son restore: <id>
+son review: --collection --decision-days --fact-days --limit --page --tag --todo-days --type
+son seed: --collection <folder>
+son show: <id>
+son stale: --clear --reason <id>
+son stats: --all --days
+son synonym add: <canonical> <term>
+son synonym list: 
+son synonym remove: <term>
+son synonym: 
+son tags: --collection
+son todo add: --body --check --collection --evidence --key --number --parent --priority --ref --status --tag <title>
+son todo backlog: --collection
+son todo done: --note <id>
+son todo list: --all --collection --done --tag
+son todo reopen: <id>
+son todo: 
+son undo: --op <id>
+son uninstall: --agent|-a --dry-run --scope --yes|-y
+son unlink: <from> <relation> <to>
+son verify: --checked --clear --ref <id>
+son: --allow-secret --json

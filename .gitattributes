@@ -1,2 +1,4 @@
 # Text files use LF on every system, so formatting checks and tests agree.
 * text=auto eol=lf
+# Databases written by old releases, for tests/compat.rs.
+tests/compat/*.db binary

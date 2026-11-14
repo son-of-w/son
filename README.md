@@ -378,6 +378,7 @@ Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every 
 | `SON_COLLECTION` | Name the current collection |
 | `SON_BUSY_MS` | How long to wait for a locked database, in milliseconds (default 10 seconds) |
 | `SON_SOURCE` | A session name to record in the activity log |
+| `SON_AUTHOR` | The name stored in the `author` field of each node you save (default: your login name) |
 | `SON_NO_UPGRADE_BACKUP=1` | Upgrade the schema of an older database without first writing a copy of it |
 | `SON_NO_LOG=1` | Turn the activity log off. The log is local |
 | `SON_REVIEW_FACT_DAYS`, `SON_REVIEW_DECISION_DAYS`, `SON_REVIEW_TODO_DAYS` | The age limits for `son review` |
@@ -424,6 +425,26 @@ Without `--json`, errors are plain text on stderr.
 ### Repeated writes
 
 A program that does not know if a write arrived (a timeout, a lost answer) can send it again safely with `--key <text>` on `son remember` and `son todo add`. The first time, the node is saved and the key is stored with it in the same transaction. Sent again with the same key and the same content, nothing new is saved and the first answer is returned again; the activity log shows it as a replay. The same key with different content is refused with `idempotency_conflict`. A key holds for the whole database, across sessions and agents, until the node is purged. A key is not a duplicate check: two writes with two keys save two nodes; use `--check` to look for duplicates.
+
+## What stays the same in version 1
+
+From 1.0.0 on, every 1.x release keeps these as they are. Things are added; nothing is removed and nothing changes its meaning.
+
+- **Commands and flags:** their names and what they do. A command or flag that gets a better name keeps the old name working, hidden from the help, until 2.0.
+- **Exit statuses:** 0 for success, 2 for a mistake in the arguments, 1 for every other failure.
+- **Error codes:** the `code` values in the table under [Errors](#errors).
+- **Environment variables:** the names in the table under [Environment](#environment).
+- **JSON output (`--json`):** the names of the fields and what they mean. A field can be added, so a program must ignore fields it does not know. There is no version field in the output of a command, because fields are only added.
+- **The export format:** a file written by `son export --json` in any release from 0.1.1 on is read by every 1.x release. The file has a `version` number of its own.
+- **Your data:** every 1.x release opens a database written by any release from 0.1.1 on, and upgrades it (after a copy; see [Backup and export](#backup-and-export)).
+
+These are not promised, and can change in any release:
+
+- **The markdown output.** It is for people and for agents that read text. Two things in it do stay: every id that is shown works with `son show <id>`, and an answer that was cut to a size says so. A program must use `--json`.
+- **The text of the skill files and of the instruction block.** `son init` brings them up to date.
+- **The SQLite schema.** The database is one SQLite file, and you can read it with any SQLite tool, at your own risk: tables and columns change between releases. The stable way to get your data out is `son export --json`.
+- **`message` and `retry` in an error**, which are text for people.
+- **Two fields that the export holds and commands do not print:** `origin` and `visibility`. They are kept for the central store of version 2 and have no meaning yet.
 
 ## Development
 

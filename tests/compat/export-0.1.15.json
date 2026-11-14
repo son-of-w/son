@@ -1,0 +1,269 @@
+{
+  "version": 2,
+  "exported_at": "2026-11-14T00:08:20.629Z",
+  "nodes": [
+    {
+      "id": "01M7BP4DK0J825S7D377H6TYWM",
+      "type": "collection",
+      "title": "shop",
+      "body": "",
+      "status": null,
+      "collection_id": null,
+      "collection": null,
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.320Z",
+      "updated_at": "2026-11-14T00:08:20.320Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DK0EMSMSNVFC8P0736J",
+      "type": "decision",
+      "title": "Use Postgres for orders",
+      "body": "Chosen over SQLite because two services write.",
+      "status": null,
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [
+        "database",
+        "orders"
+      ],
+      "created_at": "2026-11-14T00:08:20.320Z",
+      "updated_at": "2026-11-14T00:08:20.320Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DM9W5D6SWYX2TS0FRX1",
+      "type": "pattern",
+      "title": "Terraform layout for AWS",
+      "body": "One folder per environment.",
+      "status": null,
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [
+        "aws",
+        "terraform"
+      ],
+      "created_at": "2026-11-14T00:08:20.361Z",
+      "updated_at": "2026-11-14T00:08:20.361Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DP9265HK1PHAQBH65J5",
+      "type": "fact",
+      "title": "API port is 8443",
+      "body": "Set in config/server.toml, line 3.",
+      "status": null,
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.425Z",
+      "updated_at": "2026-11-14T00:08:20.587Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DQMR1VWVP8JFD9Z00RQ",
+      "type": "note",
+      "title": "A note that was dropped",
+      "body": "",
+      "status": null,
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.468Z",
+      "updated_at": "2026-11-14T00:08:20.583Z",
+      "deleted_at": "2026-11-14T00:08:20.583Z",
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DSEWQKY3AQG0S6BZQ6G",
+      "type": "todo",
+      "title": "Rotate the staging key",
+      "body": "",
+      "status": "open",
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.526Z",
+      "updated_at": "2026-11-14T00:08:20.526Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    },
+    {
+      "id": "01M7BP4DTRSE2G38V9XDG0C477",
+      "type": "todo",
+      "title": "Write the README",
+      "body": "",
+      "status": "done",
+      "collection_id": "01M7BP4DK0J825S7D377H6TYWM",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.568Z",
+      "updated_at": "2026-11-14T00:08:20.576Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null
+    }
+  ],
+  "edges": [
+    {
+      "from_id": "01M7BP4DP9265HK1PHAQBH65J5",
+      "to_id": "01M7BP4DK0EMSMSNVFC8P0736J",
+      "relation": "relates_to",
+      "created_at": "2026-11-14T00:08:20.580Z",
+      "origin": "local"
+    }
+  ],
+  "synonyms": [
+    {
+      "term": "auth",
+      "canonical": "authentication"
+    },
+    {
+      "term": "config",
+      "canonical": "configuration"
+    },
+    {
+      "term": "db",
+      "canonical": "database"
+    },
+    {
+      "term": "env",
+      "canonical": "environment"
+    },
+    {
+      "term": "gh",
+      "canonical": "github"
+    },
+    {
+      "term": "infra",
+      "canonical": "infrastructure"
+    },
+    {
+      "term": "js",
+      "canonical": "javascript"
+    },
+    {
+      "term": "k8s",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "kube",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "pg",
+      "canonical": "postgres"
+    },
+    {
+      "term": "pgsql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "postgresql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "py",
+      "canonical": "python"
+    },
+    {
+      "term": "repo",
+      "canonical": "repository"
+    },
+    {
+      "term": "tf",
+      "canonical": "terraform"
+    },
+    {
+      "term": "ts",
+      "canonical": "typescript"
+    }
+  ]
+}

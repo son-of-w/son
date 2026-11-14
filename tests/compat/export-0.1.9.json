@@ -1,0 +1,255 @@
+{
+  "version": 2,
+  "exported_at": "2026-11-14T00:08:20.248Z",
+  "nodes": [
+    {
+      "id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "type": "collection",
+      "title": "shop",
+      "body": "",
+      "status": null,
+      "collection_id": null,
+      "collection": null,
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.872Z",
+      "updated_at": "2026-11-14T00:08:19.872Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4D51VQ5F4M7DYPXXSGQ7",
+      "type": "decision",
+      "title": "Use Postgres for orders",
+      "body": "Chosen over SQLite because two services write.",
+      "status": null,
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [
+        "database",
+        "orders"
+      ],
+      "created_at": "2026-11-14T00:08:19.873Z",
+      "updated_at": "2026-11-14T00:08:19.873Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4D6MVYFE4M4Y3170VMDF",
+      "type": "pattern",
+      "title": "Terraform layout for AWS",
+      "body": "One folder per environment.",
+      "status": null,
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [
+        "aws",
+        "terraform"
+      ],
+      "created_at": "2026-11-14T00:08:19.924Z",
+      "updated_at": "2026-11-14T00:08:19.924Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4D85157PG0ZQRQB84HFB",
+      "type": "fact",
+      "title": "API port is 8443",
+      "body": "Set in config/server.toml, line 3.",
+      "status": null,
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:19.974Z",
+      "updated_at": "2026-11-14T00:08:20.196Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4DA5BNNRTXZGSDVF3AVX",
+      "type": "note",
+      "title": "A note that was dropped",
+      "body": "",
+      "status": null,
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.037Z",
+      "updated_at": "2026-11-14T00:08:20.187Z",
+      "deleted_at": "2026-11-14T00:08:20.187Z",
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4DC39PRXW45H6YBGAXZP",
+      "type": "todo",
+      "title": "Rotate the staging key",
+      "body": "",
+      "status": "open",
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.099Z",
+      "updated_at": "2026-11-14T00:08:20.099Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    },
+    {
+      "id": "01M7BP4DE7AAQH7KCQ2YTGYG6Y",
+      "type": "todo",
+      "title": "Write the README",
+      "body": "",
+      "status": "done",
+      "collection_id": "01M7BP4D50ZM1E5PK7CTHWSNMX",
+      "collection": "shop",
+      "tags": [],
+      "created_at": "2026-11-14T00:08:20.167Z",
+      "updated_at": "2026-11-14T00:08:20.175Z",
+      "deleted_at": null,
+      "source": null,
+      "author": "raxvis",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 2,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null
+    }
+  ],
+  "edges": [
+    {
+      "from_id": "01M7BP4D85157PG0ZQRQB84HFB",
+      "to_id": "01M7BP4D51VQ5F4M7DYPXXSGQ7",
+      "relation": "relates_to",
+      "created_at": "2026-11-14T00:08:20.181Z",
+      "origin": "local"
+    }
+  ],
+  "synonyms": [
+    {
+      "term": "auth",
+      "canonical": "authentication"
+    },
+    {
+      "term": "config",
+      "canonical": "configuration"
+    },
+    {
+      "term": "db",
+      "canonical": "database"
+    },
+    {
+      "term": "env",
+      "canonical": "environment"
+    },
+    {
+      "term": "gh",
+      "canonical": "github"
+    },
+    {
+      "term": "infra",
+      "canonical": "infrastructure"
+    },
+    {
+      "term": "js",
+      "canonical": "javascript"
+    },
+    {
+      "term": "k8s",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "kube",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "pg",
+      "canonical": "postgres"
+    },
+    {
+      "term": "pgsql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "postgresql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "py",
+      "canonical": "python"
+    },
+    {
+      "term": "repo",
+      "canonical": "repository"
+    },
+    {
+      "term": "tf",
+      "canonical": "terraform"
+    },
+    {
+      "term": "ts",
+      "canonical": "typescript"
+    }
+  ]
+}

@@ -1132,12 +1132,15 @@ impl App {
                     ));
                 });
                 if self.json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(
-                            &result
-                        )?)?
-                    );
+                    // As it was given the first time. An answer stored by
+                    // an older son holds two fields that are no longer
+                    // printed.
+                    let mut first: serde_json::Value = serde_json::from_str(&result)?;
+                    if let Some(fields) = first.as_object_mut() {
+                        fields.remove("origin");
+                        fields.remove("visibility");
+                    }
+                    println!("{}", serde_json::to_string_pretty(&first)?);
                 } else {
                     println!(
                         "saved {} (already saved with this key; nothing new was written)",

@@ -1,0 +1,94 @@
+backup: bytes collections history keys links log nodes path
+context (empty): collection name setup_warnings
+context --max-chars.collection: collection short_id title type
+context --max-chars.decisions[]: body body_cut collection short_id title type
+context --max-chars.facts[]: body body_cut collection short_id title type
+context --max-chars.omitted: bodies_cut items
+context --max-chars.todos[]: body body_cut collection short_id title type
+context --max-chars: collection decisions facts notes omitted patterns setup_warnings todos truncated
+context: collection decisions facts notes patterns setup_warnings todos
+doctor.checks[]: detail fix name status
+doctor: checks database status
+drop: id result short_id
+edit (moved): author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs renumbered_from rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+edit.refs[]: kind value
+edit: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+history --op.links[]: added from relation to
+history --op: after at author before kind links node op other_nodes purged source undoes undone_by
+history.items[].after.refs[]: kind value
+history.items[].after: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+history.items[].before.refs[]: kind value
+history.items[].before: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+history.items[].links[]: added from relation to
+history.items[]: after at author before kind links op other_nodes purged source undoes undone_by
+history: items limit node page pages total
+import (backup).replaced: collections history keys links log nodes
+import (backup): collections from history keys links log nodes replaced restored schema
+import: added edges freshness merged_collections renumbered synonyms unchanged updated
+init --db-only.database_state: copy from schema state
+init --db-only: database database_state
+init --list-agents[]: detected display global_rules global_skills name project_rules project_skills
+init.database_state: copy from schema state
+init.installs[].rules: path result
+init.installs[].skill: path result
+init.installs[].todo_skill: path result
+init.installs[]: agent rules skill todo_skill
+init: database database_state installs project_root scope
+link: from relation result to
+list: items limit page pages total
+log.items[]: at close collection command detail error kind ms node_id ok results source
+log: items limit page pages total
+merge.refs[]: kind value
+merge: author body collection collection_id created_at deleted_at evidence freshness_at id links_moved merged_from merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+node.reasons[]: code days other text
+node.refs[]: kind value
+node.why.factors[]: name times
+node.why.matches[]: found how in word
+node.why: factors matches text_score
+node: action at author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+node: author body collection collection_id created_at current_collection deleted_at evidence freshness_at id match merged_into number priority refs rev score short_id source stale_at stale_note status superseded_by tags title type updated_at verified_at verified_by verified_note why
+node: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into nodes number open_todos priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+node: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority reasons refs rev score short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+node: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority reasons refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+node: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+recall --max-chars.hits[]: body_cut collection current_collection match short_id title type
+recall --max-chars.omitted: also bodies_cut hits linked
+recall --max-chars: also current_collection hits linked omitted query truncated
+recall.linked[]: node of relation
+recall: also current_collection hits linked query
+reindex: reindexed
+remember --check: candidates check collection saved title type
+remember.refs[]: kind value
+remember: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+restore: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+review: items limit page pages total
+seed.files[]: bytes kind path scope son_block
+seed: changed collection files instructions
+show (superseded).links[]: node relation
+show (superseded): author body collection collection_id created_at deleted_at evidence freshness_at id links merged_from merged_into number priority refs rev short_id source stale_at stale_note status superseded_by tags title type updated_at verified_at verified_by verified_note
+show.links[]: node relation
+show.refs[]: kind value
+show: author body collection collection_id created_at deleted_at evidence freshness_at id links merged_from merged_into number priority refs rev short_id source stale_at stale_note status superseded_by tags title type updated_at verified_at verified_by verified_note
+stale: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+stats.activity: active_days commands errors reads sessions writes writes_per_recall
+stats.by_collection[]: count name
+stats.by_command[]: count name
+stats.by_day[]: commands day recalls writes
+stats.database: bytes path
+stats.recall: average_results found_nothing found_something hit_rate median_ms missed needed_close_match p95_ms recalls
+stats.store.by_type[]: count name
+stats.store: by_type collections dropped first_node_at last_change_at links nodes open_todos_older_than_30_days synonyms tags todos_done todos_dropped todos_open
+stats: activity by_collection by_command by_day database days first_event_at installed recall remarks store
+synonym add: canonical term
+synonym list[]: canonical term
+tags[]: nodes tag
+todo add: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+todo backlog[]: depth id number parent priority short_id title
+todo done: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+todo reopen: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+undo: kind links nodes op undid
+uninstall.files[]: kind path result
+uninstall: database dry_run files
+unlink: from relation result to
+verify.refs[]: kind value
+verify: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note

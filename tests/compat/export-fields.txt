@@ -1,0 +1,5 @@
+export.edges[]: created_at from_id origin relation to_id
+export.nodes[].refs[]: kind value
+export.nodes[]: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number origin priority refs rev source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note visibility
+export.synonyms[]: canonical term
+export: edges exported_at nodes synonyms version

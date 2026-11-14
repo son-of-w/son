@@ -10,6 +10,14 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage. 
 - Version 1 has no network calls. The central store is version 2 (see todo #13, `../todos/13.md`); do not start it unasked.
 - `son` must work on macOS, Linux and Windows. Do not use Unix-only paths or APIs; find the home directory with `agents::home()`. CI runs the checks on all three.
 
+## Compatibility
+
+From 1.0.0 on, the public surface only grows (see "What stays the same in version 1" in the README, and `../todos/archived/19.md`). `tests/compat.rs` pins it: commands and flags, error codes, exit statuses, environment variables, the JSON fields of each command, and databases and exports made by old releases.
+
+- When you add a command, a flag, an error code, an environment variable or a JSON field, add it to the lists in `tests/compat.rs` in the same commit. Adding a line there is normal.
+- Never remove a line there, and never change one, to make the test pass. A removed or renamed command, flag, code, variable or field breaks programs that use `son`. Give a renamed command or flag a hidden alias (`#[command(alias = ...)]`, `#[arg(alias = ...)]`) and keep the old name in the list.
+- Markdown output, the text of the skills and of the block, and the SQLite schema are not pinned.
+
 ## Git and GitHub
 
 - After each feature is implemented and `make check` passes, commit it and push to `main` without asking. Do not push a state that fails the checks.

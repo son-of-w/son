@@ -13,8 +13,17 @@ pub fn print_json(value: &Value) {
     );
 }
 
+/// A node as a command prints it with `--json`. It is the stored node
+/// with `short_id` added, and without `origin` and `visibility`: those
+/// two are kept for the central store of version 2 and have no meaning
+/// yet, so they are not part of what stays compatible. The export holds
+/// them, so that an export and an import lose nothing.
 pub fn node_json(node: &Node) -> Value {
     let mut value = serde_json::to_value(node).expect("a node always serializes");
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("origin");
+        fields.remove("visibility");
+    }
     value["short_id"] = json!(node.short());
     value
 }

@@ -271,7 +271,16 @@ fn link_change(change: &EdgeChange, node: &Node) -> String {
 }
 
 fn entry_json(entry: &Entry) -> Value {
-    serde_json::to_value(entry).expect("a history entry always serializes")
+    let mut value = serde_json::to_value(entry).expect("a history entry always serializes");
+    // The node before and after, without the two fields that commands do
+    // not print (see `render::node_json`).
+    for side in ["before", "after"] {
+        if let Some(fields) = value.get_mut(side).and_then(Value::as_object_mut) {
+            fields.remove("origin");
+            fields.remove("visibility");
+        }
+    }
+    value
 }
 
 fn entry_head(entry: &Entry) -> String {
