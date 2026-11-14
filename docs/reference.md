@@ -166,6 +166,7 @@ With `--json`, a command that succeeds writes its result to stdout. A command th
 | `database_error` | SQLite reported another error |
 | `unsupported_schema` | The database is from a newer `son`, or a read-only command met an older one |
 | `upgrade_backup_failed` | The database is of an older schema, and the copy that is made before an upgrade could not be written. Nothing was changed |
+| `upgrade_failed` | A step of a schema upgrade failed. The upgrade was taken back whole: nothing was changed, and the `son` that made the database can still use it |
 | `conflict` | `son undo` found a later change, or the change was already undone. Nothing was changed |
 | `unavailable` | `son undo` needs history that was purged. Nothing was changed |
 | `idempotency_conflict` | The `--key` was already used for a different write. Nothing was saved |

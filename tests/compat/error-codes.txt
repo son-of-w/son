@@ -18,3 +18,4 @@ unknown_collection
 unknown_id
 unsupported_schema
 upgrade_backup_failed
+upgrade_failed

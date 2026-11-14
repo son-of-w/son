@@ -18,7 +18,8 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 - Before the schema of a database is upgraded, a copy of the database is written to the `backups` folder beside it. `SON_NO_UPGRADE_BACKUP=1` turns this off. `son init` says if it created the database, found it up to date, or upgraded it, and where the copy is.
 - `son context` tells the agent when the skill files or the instruction block are from another version of `son`, so that it can tell you to run `son init`. In JSON this is `setup_warnings`.
 - `son doctor` has new checks: stored nodes of a form this `son` does not know, stored text that looks like a secret, a database file that other users can read, and the copies made before schema upgrades. A new status, `warning`, does not make `son doctor` fail.
-- New error codes: `broken_block`, `possible_secret`, `upgrade_backup_failed`, `uninstall_failed`.
+- New error codes: `broken_block`, `possible_secret`, `upgrade_backup_failed`, `upgrade_failed`, `uninstall_failed`.
+- When a step of a schema upgrade fails, the error (`upgrade_failed`) says that the upgrade was stopped and that nothing was changed.
 - The README states what stays the same in every 1.x release, and tests pin it.
 - Each release holds a `.deb` and an `.rpm` package for Linux on x86-64 and ARM64, beside the archives.
 - Install scripts for macOS and Linux (`scripts/install.sh`) and for Windows (`scripts/install.ps1`): they download the binary of a release, check it against `SHA256SUMS`, and put it on your `PATH`.

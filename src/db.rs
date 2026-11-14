@@ -720,7 +720,21 @@ fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
         Err(err) => {
             let _ = conn.execute_batch("ROLLBACK");
             discard(&copied);
-            Err(err)
+            if before < 1 {
+                // A new database that could not be made: there is no old
+                // data to speak of.
+                return Err(err);
+            }
+            Err(crate::error::coded(
+                "upgrade_failed",
+                format!(
+                    "the database was not upgraded from schema {before} to {SCHEMA_VERSION}: \
+                     a step of the upgrade failed ({err:#}). Nothing was changed, and the son \
+                     that made this database can still use it. Run `son doctor` to look at \
+                     the database. If it finds nothing, this is a fault in son: report it at \
+                     https://github.com/son-of-w/son/issues"
+                ),
+            ))
         }
     }
 }
@@ -896,6 +910,44 @@ mod tests {
                 copy: None
             }
         );
+        assert!(copies(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_step_that_fails_takes_the_whole_upgrade_back_and_says_so() {
+        let dir = temp_dir("stepfail");
+        let path = dir.join("son.db");
+        version_8(&path);
+        // A column that a later step adds is there already, so that step
+        // fails after the steps before it have run.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("ALTER TABLE nodes ADD COLUMN number TEXT")
+            .unwrap();
+        let err = open_with(&path, true).unwrap_err();
+        assert_eq!(crate::error::code_of(&err), "upgrade_failed");
+        let message = format!("{err:#}");
+        assert!(message.contains("from schema 8"), "{message}");
+        assert!(message.contains("Nothing was changed"), "{message}");
+        assert!(message.contains("duplicate column name"), "{message}");
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 8);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM nodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        // A column of a step that ran before the one that failed is gone.
+        let priority: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('nodes') WHERE name = 'priority'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(priority, 0);
+        drop(conn);
+        // The copy made for this upgrade is not left behind.
         assert!(copies(&dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
