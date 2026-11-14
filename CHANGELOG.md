@@ -4,6 +4,10 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+### Added
+
+- `son` can be installed with Homebrew (`brew install son-of-w/tap/son`), with Scoop, from crates.io (`cargo install son-of-w`), and with the install scripts at `https://son-of-w.com/install.sh` and `/install.ps1`. The README lists each one.
+
 ### Fixed
 
 - When the reader of the output closes the pipe early (`son recall x | head -1`, `son show <id> | grep -q word`), `son` ends quietly. It printed "failed printing to stdout: Broken pipe" and a panic line.

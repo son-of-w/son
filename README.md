@@ -76,11 +76,19 @@ You do not type these commands. Your agents do. `son init` tells them when to re
 
 ## Quick start
 
-**1. Install.** Download the archive for your system from the [releases page](https://github.com/son-of-w/son/releases/latest) and put `son` on your `PATH`. Or, with Rust:
+**1. Install.** On macOS and Linux:
 
 ```bash
-cargo install --git https://github.com/son-of-w/son
+curl -fsSL https://son-of-w.com/install.sh | sh
 ```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://son-of-w.com/install.ps1 | iex
+```
+
+Homebrew, Scoop, Linux packages and `cargo install` are under [Install](#install).
 
 **2. Set up your agents.**
 
@@ -115,7 +123,29 @@ $ son context
 
 ## Install
 
-`son` runs on macOS, Linux and Windows. Download the archive for your system from the [releases page](https://github.com/son-of-w/son/releases), unpack it, and put `son` on your `PATH`.
+`son` runs on macOS, Linux and Windows.
+
+| System | Command |
+| --- | --- |
+| macOS, with Homebrew | `brew install son-of-w/tap/son` |
+| macOS and Linux | `curl -fsSL https://son-of-w.com/install.sh \| sh` |
+| Windows, in PowerShell | `irm https://son-of-w.com/install.ps1 \| iex` |
+| Windows, with Scoop | `scoop bucket add son-of-w https://github.com/son-of-w/scoop-bucket`, then `scoop install son` |
+| Linux, Debian and Ubuntu | download `son-v<version>-amd64.deb` (or `arm64`) from the [releases page](https://github.com/son-of-w/son/releases/latest), then `sudo dpkg -i son-v*.deb` |
+| Linux, Fedora and RHEL | download `son-v<version>-x86_64.rpm` (or `aarch64`), then `sudo rpm -i son-v*.rpm` |
+| Any system with Rust | `cargo install son-of-w` |
+
+Then run `son init` to set `son` up for your agents.
+
+The two install scripts download the binary of the newest release, check it against the release's `SHA256SUMS`, and put it in `~/.local/bin` (on Windows: `%LOCALAPPDATA%\Programs\son`, which the script adds to your `PATH`). They do not run `son init` and do not touch your memory. Read a script before you run it: [install.sh](scripts/install.sh), [install.ps1](scripts/install.ps1).
+
+**Upgrade** with the same tool: `brew upgrade son`, `scoop update son`, the install script again, the newer package, or `cargo install son-of-w` again. Then run `son init`: it upgrades the database, after it has made a copy of it, and brings the agent files up to date.
+
+**Remove.** `son uninstall` takes `son` out of your agents' files. Then remove the program: `brew uninstall son`, `scoop uninstall son`, `sudo dpkg -r son`, `sudo rpm -e son`, `cargo uninstall son-of-w`, or delete the binary. Your memory in `~/.son-of-w` stays until you delete it.
+
+### By hand
+
+Every release also holds one archive for each system: download it from the [releases page](https://github.com/son-of-w/son/releases/latest), unpack it, and put `son` on your `PATH`.
 
 | System | Archive |
 | --- | --- |
@@ -125,15 +155,7 @@ $ son context
 | Linux, ARM64 | `son-v<version>-aarch64-unknown-linux-musl.tar.gz` |
 | Windows, x86-64 | `son-v<version>-x86_64-pc-windows-msvc.zip` |
 
-On macOS and Linux:
-
-```bash
-tar -xzf son-v*.tar.gz && sudo mv son /usr/local/bin/
-```
-
-On Windows, unzip the archive and move `son.exe` to a folder that is on your `PATH`.
-
-The Linux binaries are linked statically, so they run on any distribution. `SHA256SUMS` in each release lists the checksum of every archive.
+The Mac binaries are signed and notarized. The Linux binaries are linked statically, so they run on any distribution. `SHA256SUMS` in each release lists the checksum of every file.
 
 ### From source
 
@@ -149,7 +171,7 @@ That puts `son` in `~/.cargo/bin`. To choose another place, give a prefix (the b
 make install PREFIX=/usr/local
 ```
 
-Without a clone:
+Without a clone, the newest commit and not the newest release:
 
 ```bash
 cargo install --git https://github.com/son-of-w/son
