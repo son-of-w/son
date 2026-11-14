@@ -1,0 +1,9 @@
+scenario: household
+writer: codex
+reader: claude
+date: 2026-11-14T22:51:50Z
+son: son 0.1.15
+commit: b472767
+claude: 2.1.325 (Claude Code)
+codex: codex-cli 0.169.0
+system: Darwin arm64

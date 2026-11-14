@@ -1,0 +1,5 @@
+Bash: cd "$PWD"; ls -la; export SON_COLLECTION=household; son context 2>&1; echo ---; son recall furnace filter maintenance receipt shop 2>&1
+Bash: cat README.md; find receipts .agents .claude -type f | head -50; for f in $(find receipts -type f); do echo "== $f"; cat "$f"; done; echo; son todo list --all 2>&1 || son todo list 2>&1; son --help 2>&1 | head -40
+Bash: export SON_COLLECTION=household; son todo list --done 2>&1; son show 00fact02 2>&1; son edit --help 2>&1 | head -30
+Bash: export SON_COLLECTION=household; son edit 00fact02 --help 2>&1 | grep -E 'evidence|ref' ; son edit 00fact02 --title "The last furnace filter was bought at Hearthside Supplies" --body "The most recent furnace filter purchase (20x25x1) was at Hearthside Supplies on 2026-09-14, per receipts/2026-09-filter.txt. An earlier purchase (recorded 2026-04-01) was at Brightway Hardware." 2>&1
+Bash: export SON_COLLECTION=household; son edit 00fact02 --evidence observation --ref file:receipts/2026-09-filter.txt 2>&1; son verify 00fact02 --checked "receipts/2026-09-filter.txt dated 2026-09-14 lists Hearthside Supplies, 1 x furnace filter 20x25x1" 2>&1

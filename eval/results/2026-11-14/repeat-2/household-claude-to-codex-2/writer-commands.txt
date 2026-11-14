@@ -1,0 +1,10 @@
+Bash: export SON_COLLECTION=household; son context; echo ---; son recall boiler "Northwind B24" chimney "smoke alarm" "furnace filter"; echo ---; ls -R; echo ---; for f in receipts/* *; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done
+Bash: export SON_COLLECTION=household; son remember fact "Boiler is a Northwind B24, installed 2021" --check; echo ---; son todo add "Book the chimney sweep before December" --priority p1 --check 2>&1 | head -20; echo ---; son edit --help 2>&1 | head -30; son todo --help 2>&1 | head -20
+Bash: export SON_COLLECTION=household
+son remember fact "Boiler is a Northwind B24, installed 2021" --body "Our boiler is a Northwind B24. It was installed in 2021." --tag boiler --evidence user-statement --ref user:"Our boiler is a Northwind B24. It was installed in 2021."
+son todo add "Book the chimney sweep before December" --priority p1 --tag chimney,maintenance --evidence user-statement --ref user:"I need to book the chimney sweep before December." 2>&1 || son todo add "Book the chimney sweep before December" --priority p1
+son edit 00fact01 --title "Furnace filter size is 20x25x1" --body "Buy 20x25x1 filters. This replaced the old 16x25x1 size after the new air handler was fitted (receipt 2026-09-14, Hearthside Supplies)."
+son verify 00fact01 --checked "Read receipts/2026-09-filter.txt: furnace filter 20x25x1, replaces old 16x25x1"
+son verify 00deci01 --checked "User confirmed on 2026-11-14: we service the boiler every October"
+son verify 00todo01 --checked "User confirmed on 2026-11-14 the smoke alarm batteries were replaced the previous week"
+echo ---; son context

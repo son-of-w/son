@@ -1,0 +1,13 @@
+Bash: export SON_COLLECTION=household; son context; echo ---; son recall boiler furnace chimney smoke alarm filter; echo ---; ls -R; echo ---; cat receipts/* 2>/dev/null | head -100
+Bash: export SON_COLLECTION=household; son remember --help 2>&1 | head -40; son edit --help 2>&1 | head -30; son todo --help 2>&1|head -30; son show 00todo01
+Bash: export SON_COLLECTION=household; son remember fact "Boiler is a Northwind B24, installed 2021" --check; son remember fact "Furnace filter size is 20x25x1" --check; son todo add --help | head -30
+Bash: export SON_COLLECTION=household
+son remember fact "Boiler is a Northwind B24, installed 2021" --body "Model: Northwind B24. Installed in 2021." --tag boiler --evidence user-statement --ref user:"Our boiler is a Northwind B24. It was installed in 2021." --link 00deci01:relates_to 2>&1 || son remember fact "Boiler is a Northwind B24, installed 2021" --body "Model: Northwind B24. Installed in 2021." --tag boiler --evidence user-statement --ref user:"Our boiler is a Northwind B24. It was installed in 2021."
+echo ---
+son remember fact "Furnace filter size is 20x25x1" --body "Buy 20x25x1 filters. Replaces the old 16x25x1 size after the new air handler was fitted (receipt from Hearthside Supplies, 2026-09-14)." --tag filter,furnace --evidence observation --ref file:receipts/2026-09-filter.txt --link 00fact01:supersedes
+echo ---
+son todo add "Book the chimney sweep before December" --body "Book before 2026-12-01." --priority p1 --tag chimney,maintenance --evidence user-statement --ref user:"I need to book the chimney sweep before December."
+echo ---
+son edit 00todo01 --body "Done: user replaced the smoke alarm batteries the week before 2026-11-14."
+son verify 00deci01 --checked "User restated on 2026-11-14: 'We service the boiler every October.'"
+son verify 00todo01 --checked "User stated on 2026-11-14 the batteries were replaced last week; status done matches."

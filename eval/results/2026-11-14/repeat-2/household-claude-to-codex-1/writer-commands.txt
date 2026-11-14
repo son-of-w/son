@@ -1,0 +1,16 @@
+Bash: export SON_COLLECTION=household; son context; echo ---; son recall boiler Northwind chimney smoke alarm furnace filter; echo ---; ls -R; echo ---; for f in receipts/* *; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done
+Bash: export SON_COLLECTION=household; son --help; son edit --help; son todo --help; son remember --help | head -40
+Bash: export SON_COLLECTION=household
+son remember fact "Boiler is a Northwind B24, installed 2021" --check
+son todo add "Book the chimney sweep before December" --check 2>&1 || true
+son remember fact "Smoke alarm batteries replaced" --check
+Bash: export SON_COLLECTION=household
+son remember fact "Boiler is a Northwind B24, installed 2021" --body "The household boiler is a Northwind B24, installed in 2021." --tag boiler --evidence user-statement --ref user:"Our boiler is a Northwind B24. It was installed in 2021."
+son todo add "Book the chimney sweep before December" --priority p1 --body "Due before 2026-12-01." --tag chimney,maintenance --evidence user-statement --ref user:"I need to book the chimney sweep before December." 2>&1 || son todo add "Book the chimney sweep before December 2026" --priority p1
+son edit 00todo01 --body "Batteries replaced in the week of 2026-11-02 to 2026-11-08 (user said 'last week' on 2026-11-14)." --evidence user-statement --ref user:"I replaced the smoke alarm batteries last week, so that is done."
+son verify 00todo01 --checked "User confirmed on 2026-11-14 that the batteries were replaced last week"
+son edit 00deci01 --evidence user-statement --ref user:"We service the boiler every October."
+son verify 00deci01 --checked "User restated on 2026-11-14 that the boiler is serviced every October"
+son edit 00fact01 --title "Furnace filter size is 20x25x1" --body "Buy 20x25x1 filters. This replaced the old 16x25x1 size after the new air handler was fitted (receipt from Hearthside Supplies, 2026-09-14)." --evidence observation --ref file:receipts/2026-09-filter.txt
+son verify 00fact01 --checked "Read receipts/2026-09-filter.txt: 1 x furnace filter 20x25x1, replaces old 16x25x1"
+son context
