@@ -4,6 +4,10 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+### Fixed
+
+- When the reader of the output closes the pipe early (`son recall x | head -1`, `son show <id> | grep -q word`), `son` ends quietly. It printed "failed printing to stdout: Broken pipe" and a panic line.
+
 ## 0.1.16 - 2026-11-14
 
 ### Added

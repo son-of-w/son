@@ -2956,6 +2956,47 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
 }
 
 #[test]
+fn a_reader_that_closes_the_pipe_early_gets_no_panic() {
+    let sb = Sandbox::new("closed-pipe");
+    // Enough text that one answer does not fit in the buffer of a pipe.
+    let body = "A line of a long body that is stored for this test. ".repeat(400);
+    for at in 0..40 {
+        sb.ok(
+            "alpha",
+            &[
+                "remember",
+                "note",
+                &format!("Long note {at}"),
+                "--body",
+                &body,
+            ],
+        );
+    }
+    for args in [
+        vec!["export"],
+        vec!["--json", "export"],
+        vec!["list", "--limit", "40"],
+    ] {
+        let mut child = sb
+            .command("alpha", &args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The reader goes away before it has read anything.
+        drop(child.stdout.take());
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("panicked"), "son {args:?}: {stderr}");
+        assert!(
+            !stderr.contains("failed printing"),
+            "son {args:?}: {stderr}"
+        );
+        assert!(output.status.success(), "son {args:?}: {stderr}");
+    }
+}
+
+#[test]
 fn todo_list_says_how_many_closed_todos_it_leaves_out() {
     let sb = Sandbox::new("todo-closed");
     sb.ok("alpha", &["todo", "add", "Book the sweep"]);
