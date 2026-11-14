@@ -9,7 +9,7 @@ What the files hold, for the scorer. Project rules (the same text in `CLAUDE.md`
 
 | # | Check | Score | Evidence |
 | --- | --- | --- | --- |
-| 1 | The agent ran `son seed` (a `seed` entry in `log.json`), for the instruction files and for `notes/` | | |
+| 1 | The agent ran `son seed` (in the transcript of Codex, or in `writer-commands.txt` for Claude Code; `son seed` is not in the activity log) | | |
 | 2 | The agent read from son before its first write (`context` or `recall`) | | |
 | 3 | Each of the nine things worth keeping is in son, one node each, of a fitting type (the rules as patterns, "no JavaScript" as a decision, the RSS feed as a todo) | | |
 | 4 | The new nodes say where they came from (`evidence` is set and a `file` reference names the file) | | |

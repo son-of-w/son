@@ -33,9 +33,12 @@
 #
 # The commands that start an agent can be replaced:
 #   EVAL_CLAUDE_CMD   default: claude -p --permission-mode bypassPermissions
-#                              --strict-mcp-config
-#                     (the last flag keeps the connectors of your claude.ai
-#                     account out of the run)
+#                              --strict-mcp-config --output-format stream-json
+#                              --verbose
+#                     (--strict-mcp-config keeps the connectors of your
+#                     claude.ai account out of the run; the last two flags
+#                     put every command the agent ran into the transcript,
+#                     which is then one JSON object on each line)
 #   EVAL_CODEX_CMD    default: codex exec --sandbox workspace-write
 #                              --skip-git-repo-check --add-dir <run folder>
 #                     (the run folder is added because the database is in it)
@@ -146,7 +149,7 @@ start_agent() { # start_agent <agent> <prompt file>
   local agent="$1" prompt="$2"
   local -a command
   case "$agent" in
-    claude) read -r -a command <<< "${EVAL_CLAUDE_CMD:-claude -p --permission-mode bypassPermissions --strict-mcp-config}" ;;
+    claude) read -r -a command <<< "${EVAL_CLAUDE_CMD:-claude -p --permission-mode bypassPermissions --strict-mcp-config --output-format stream-json --verbose}" ;;
     codex)  read -r -a command <<< "${EVAL_CODEX_CMD:-codex exec --sandbox workspace-write --skip-git-repo-check --add-dir $run}" ;;
   esac
   if [ "$isolate" = 1 ]; then
@@ -157,6 +160,32 @@ start_agent() { # start_agent <agent> <prompt file>
   else
     "${command[@]}" "$(cat "$prompt")" < /dev/null
   fi
+}
+
+# A transcript of Claude Code is JSON lines. Write the commands it ran and
+# its last answer as plain text beside it, when python3 is there.
+readable() { # readable <label>
+  local file="$run/$1-transcript.txt"
+  head -c 1 "$file" 2>/dev/null | grep -q '{' || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$file" "$run/$1-commands.txt" "$run/$1-answer.txt" <<'PY' || true
+import json, sys
+commands, answer = [], ""
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "assistant":
+        for part in event.get("message", {}).get("content", []):
+            if part.get("type") == "tool_use":
+                given = part.get("input", {})
+                commands.append(part.get("name", "") + ": " + str(given.get("command") or given.get("file_path") or given))
+    if event.get("type") == "result":
+        answer = event.get("result") or ""
+open(sys.argv[2], "w").write("\n".join(commands) + "\n")
+open(sys.argv[3], "w").write(answer + "\n")
+PY
 }
 
 snapshot() { # snapshot <label>: what the database and the folder hold now
@@ -203,7 +232,8 @@ phase() { # phase <label> <agent> <prompt file>
   case "$agent" in
     claude|codex)
       (cd "$run/work" && start_agent "$agent" "$prompt") > "$run/$label-transcript.txt" 2>&1 || echo "agent exited with $?" >> "$run/$label-transcript.txt"
-      check_login "$agent" ;;
+      check_login "$agent"
+      readable "$label" ;;
     manual) echo "Open an agent in: $run/work"
             echo "with: export HOME=\"$HOME\" PATH=\"$run/bin:\$PATH\" SON_DB=\"$SON_DB\" SON_SOURCE=\"$SON_SOURCE\" ${SON_COLLECTION:+SON_COLLECTION=$SON_COLLECTION}"
             echo "Give it the prompt in $run/$label-prompt.md, save its transcript as $run/$label-transcript.txt, then press Enter."

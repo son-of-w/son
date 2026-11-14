@@ -12,13 +12,13 @@
     {
       "id": "01JEVALH000000000000FACT02",
       "type": "fact",
-      "title": "Furnace filters come from Brightway Hardware",
-      "body": "Buy the furnace filters at Brightway Hardware.",
+      "title": "The last furnace filter was bought at Brightway Hardware",
+      "body": "The most recent furnace filter purchase was at Brightway Hardware.",
       "tags": [
         "filter",
         "shop"
       ],
-      "evidence": "user_statement",
+      "evidence": "observation",
       "created_at": "2026-04-01T00:00:00.000Z",
       "updated_at": "2026-04-01T00:00:00.000Z",
       "collection_id": "01JEVALH000000000000COLL01"
