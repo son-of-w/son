@@ -4,6 +4,10 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+## 1.0.0 - 2026-11-14
+
+The first stable release. From this version on, every 1.x release keeps the commands, flags, exit statuses, error codes, environment variables, JSON fields and the export format as they are; see "What stays the same in version 1" in the README.
+
 ### Added
 
 - `son` can be installed with Homebrew (`brew install son-of-w/tap/son`), with Scoop, from crates.io (`cargo install son-of-w`), and with the install scripts at `https://son-of-w.com/install.sh` and `/install.ps1`. The README lists each one.
