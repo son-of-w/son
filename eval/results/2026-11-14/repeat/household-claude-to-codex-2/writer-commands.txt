@@ -1,0 +1,14 @@
+Skill: {'skill': 'son'}
+Bash: cd "$PWD"; ls -R; export SON_COLLECTION=household; son context; son recall boiler Northwind chimney furnace filter smoke alarm
+Bash: cat receipts/2026-09-filter.txt; echo ---; cat README.md; echo ---; export SON_COLLECTION=household; son remember fact "Boiler is a Northwind B24, installed 2021" --check; son todo add "Book the chimney sweep before December" --check; son show 00todo01; son show 00fact01
+Bash: export SON_COLLECTION=household; son edit --help 2>&1 | head -40
+Bash: export SON_COLLECTION=household; son edit --help 2>&1 | sed -n 40,80p
+Bash: export SON_COLLECTION=household
+son remember fact "Boiler is a Northwind B24, installed 2021" --body "Boiler model: Northwind B24. Installed in 2021." --tag boiler --evidence user-statement --ref user:"Our boiler is a Northwind B24. It was installed in 2021." --link 00deci01:relates_to
+son verify 00deci01 --checked "User restated on 2026-11-14: 'We service the boiler every October.' Matches stored decision."
+son edit 00deci01 --ref user:"We service the boiler every October."
+son todo add "Book the chimney sweep before December" --body "Deadline: before 2026-12-01." --priority p1 --tag chimney,maintenance --evidence user-statement --ref user:"I need to book the chimney sweep before December."
+son edit 00todo01 --body "Batteries replaced in the week of 2026-11-07 (user said 'last week' on 2026-11-14)." --evidence user-statement --ref user:"I replaced the smoke alarm batteries last week, so that is done."
+son edit 00fact01 --title "Furnace filter size is 20x25x1" --body "Buy 20x25x1 filters. Changed from 16x25x1 when the new air handler was fitted (receipt from Hearthside Supplies, 2026-09-14)." --evidence observation --ref file:receipts/2026-09-filter.txt
+son verify 00fact01 --checked "Read receipts/2026-09-filter.txt: 1 x furnace filter 20x25x1, replaces old 16x25x1 after new air handler."
+son context

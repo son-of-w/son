@@ -1,0 +1,24 @@
+Bash: cd "$PWD"; son context; echo ---; ls -la; ls -la notes .claude; echo ---; for f in notes/* ; do echo "=== $f"; cat "$f"; done; echo; git diff CLAUDE.md; find .claude -type f | head; 
+Bash: cat AGENTS.md README.md build.py .son; ls -R pages; head -c 600 pages/*/* pages/* 2>/dev/null; son --help; son remember --help; son recall larkspur rsync javascript dates commit
+Bash: son seed; son seed --help; son collections; son todo add --help | head -30; cat pages/index.md
+Bash: cat ~/.codex/AGENTS.md; echo ---; cat ~/.claude/CLAUDE.md; ls ~/.claude/projects/*/memory 2>/dev/null
+Bash: son remember pattern "Pages are Markdown in pages/; build.py makes the HTML" --check
+son remember decision "No JavaScript on the larkspur site" --check
+son remember pattern "Dates in pages are written year first (2026-03-01)" --check
+son remember pattern "Run python3 build.py before calling a change done" --check
+son remember decision "Keep each image under 200 KB" --check
+son remember todo "Add an RSS feed for the news pages" --check
+son remember pattern "How larkspur is deployed" --check
+son remember pattern "Commit messages are one plain sentence with no prefix" --collection all-projects --check
+son remember pattern "Ask before adding a new dependency" --collection all-projects --check
+Bash: W="$PWD"; C="file:$W/CLAUDE.md"; A="file:$W/AGENTS.md"
+son remember pattern "Pages are Markdown in pages/; build.py makes the HTML" --body "Site pages are Markdown files in pages/. Never write HTML by hand; build.py generates the output into out/." --tag larkspur,pages,build --evidence observation --ref "$C" --ref "$A" --ref "file:$W/README.md"
+son remember decision "No JavaScript on the larkspur site" --body "We decided the site has no JavaScript. Do not add any." --tag larkspur,javascript --evidence observation --ref "$C" --ref "$A"
+son remember pattern "Dates in pages are written year first (2026-03-01)" --body "Dates in pages use the YYYY-MM-DD form, e.g. 2026-03-01." --tag larkspur,pages,dates --evidence observation --ref "$C" --ref "$A"
+son remember pattern "Run python3 build.py before calling a change done" --body "Run python3 build.py (builds pages/ into out/) before saying a change is done." --tag larkspur,build --evidence observation --ref "$C" --ref "$A"
+son remember decision "Keep each image under 200 KB" --body "Decided 2026-02-10: images are kept under 200 KB each, because larger ones made the home page slow." --tag larkspur,images,performance --evidence observation --ref "file:$W/notes/decisions.txt"
+son todo add "Add an RSS feed for the news pages" --body "Noted as still to do on 2026-03-02." --tag larkspur,rss,news --evidence observation --ref "file:$W/notes/decisions.txt"
+son remember pattern "How larkspur is deployed" --body "Every Friday the out/ folder is copied with rsync to the host larkspur.example.invalid, as the account larkspur-deploy. The password is in the password manager, entry \"larkspur deploy\" (not stored here). The setup is fictional, for an evaluation." --tag larkspur,deploy,rsync --evidence observation --ref "file:$W/notes/deploy.md"
+son remember pattern "Commit messages are one plain sentence with no prefix" --collection all-projects --body "In every project, write commit messages as one plain sentence, with no prefix such as \"feat:\"." --tag git,commits --evidence observation --ref file:~/.claude/CLAUDE.md --ref file:~/.codex/AGENTS.md
+son remember pattern "Ask before adding a new dependency" --collection all-projects --body "In every project, ask the user before adding a new dependency." --tag dependencies --evidence observation --ref file:~/.claude/CLAUDE.md --ref file:~/.codex/AGENTS.md
+son context; git status --short

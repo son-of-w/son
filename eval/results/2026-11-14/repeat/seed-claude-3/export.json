@@ -1,0 +1,488 @@
+{
+  "version": 2,
+  "exported_at": "2026-11-14T22:41:31.362Z",
+  "nodes": [
+    {
+      "id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "type": "collection",
+      "title": "larkspur",
+      "body": "",
+      "status": null,
+      "collection_id": null,
+      "collection": null,
+      "tags": [],
+      "created_at": "2026-11-14T22:41:18.814Z",
+      "updated_at": "2026-11-14T22:41:18.814Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZFX0725MW2GMYBTYX8S",
+      "type": "collection",
+      "title": "all-projects",
+      "body": "",
+      "status": null,
+      "collection_id": null,
+      "collection": null,
+      "tags": [],
+      "created_at": "2026-11-14T22:41:24.989Z",
+      "updated_at": "2026-11-14T22:41:24.989Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": null,
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HSEY69XQW7N1SDCP361H",
+      "type": "decision",
+      "title": "Keep each image under 200 KB",
+      "body": "Decided 2026-02-10: each image is kept under 200 KB. Larger images made the home page slow.",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "images",
+        "performance"
+      ],
+      "created_at": "2026-11-14T22:41:18.814Z",
+      "updated_at": "2026-11-14T22:41:18.814Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "notes/decisions.txt"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HSF6KM8BK2QPNRW1NWF5",
+      "type": "todo",
+      "title": "Add an RSS feed for the news pages",
+      "body": "Noted as still to do on 2026-03-02.",
+      "status": "open",
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "news",
+        "rss"
+      ],
+      "created_at": "2026-11-14T22:41:18.822Z",
+      "updated_at": "2026-11-14T22:41:18.822Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "notes/decisions.txt"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": "1"
+    },
+    {
+      "id": "01M7E3HSFEXF3NQ4QNDTMZCW6Y",
+      "type": "pattern",
+      "title": "How the larkspur site is deployed",
+      "body": "Every Friday, the out/ folder is copied with rsync to the host larkspur.example.invalid, using the deploy account larkspur-deploy. The password is in the password manager, entry \"larkspur deploy\" (not stored here). Note: the source file says this setup is fictional.",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "deploy",
+        "rsync"
+      ],
+      "created_at": "2026-11-14T22:41:18.830Z",
+      "updated_at": "2026-11-14T22:41:18.830Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "notes/deploy.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZF6QQ316CMS4QWBYX1S",
+      "type": "pattern",
+      "title": "Pages are Markdown in pages/; build.py generates the HTML",
+      "body": "Site pages are Markdown files in pages/. Never write HTML by hand: build.py makes the output (into out/).",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "build",
+        "markdown",
+        "pages"
+      ],
+      "created_at": "2026-11-14T22:41:24.966Z",
+      "updated_at": "2026-11-14T22:41:24.966Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "AGENTS.md"
+        },
+        {
+          "kind": "file",
+          "value": "CLAUDE.md"
+        },
+        {
+          "kind": "file",
+          "value": "README.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZFDXHWFKW0AACGESQ9X",
+      "type": "decision",
+      "title": "No JavaScript on the larkspur site",
+      "body": "We decided to have no JavaScript on the site. Do not add any.",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "javascript",
+        "site"
+      ],
+      "created_at": "2026-11-14T22:41:24.973Z",
+      "updated_at": "2026-11-14T22:41:24.973Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "AGENTS.md"
+        },
+        {
+          "kind": "file",
+          "value": "CLAUDE.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZFKVQ3PJ45N2X76ZSVB",
+      "type": "pattern",
+      "title": "Dates in pages are written year first, like 2026-03-01",
+      "body": "Write dates in pages in the form 2026-03-01 (YYYY-MM-DD, year first).",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "dates",
+        "pages"
+      ],
+      "created_at": "2026-11-14T22:41:24.979Z",
+      "updated_at": "2026-11-14T22:41:24.979Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "AGENTS.md"
+        },
+        {
+          "kind": "file",
+          "value": "CLAUDE.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZFREF2HWVZDGA1R1MHB",
+      "type": "pattern",
+      "title": "Run python3 build.py before calling a change done",
+      "body": "Run python3 build.py before you say a change is done.",
+      "status": null,
+      "collection_id": "01M7E3HSEYCEX5VDXFE5CEY1FC",
+      "collection": "larkspur",
+      "tags": [
+        "build",
+        "workflow"
+      ],
+      "created_at": "2026-11-14T22:41:24.984Z",
+      "updated_at": "2026-11-14T22:41:24.984Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "AGENTS.md"
+        },
+        {
+          "kind": "file",
+          "value": "CLAUDE.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZFXSXCS7CKRY6GKHPP6",
+      "type": "pattern",
+      "title": "Commit messages are one plain sentence with no prefix",
+      "body": "In every project, write a commit message as one plain sentence, with no prefix such as \"feat:\".",
+      "status": null,
+      "collection_id": "01M7E3HZFX0725MW2GMYBTYX8S",
+      "collection": "all-projects",
+      "tags": [
+        "commits",
+        "git"
+      ],
+      "created_at": "2026-11-14T22:41:24.989Z",
+      "updated_at": "2026-11-14T22:41:24.989Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "~/.claude/CLAUDE.md"
+        },
+        {
+          "kind": "file",
+          "value": "~/.codex/AGENTS.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    },
+    {
+      "id": "01M7E3HZG40WWY042MX4R2YEJ9",
+      "type": "pattern",
+      "title": "Ask before adding a new dependency to any project",
+      "body": "In every project, ask the user before adding a new dependency.",
+      "status": null,
+      "collection_id": "01M7E3HZFX0725MW2GMYBTYX8S",
+      "collection": "all-projects",
+      "tags": [
+        "dependencies"
+      ],
+      "created_at": "2026-11-14T22:41:24.996Z",
+      "updated_at": "2026-11-14T22:41:24.996Z",
+      "deleted_at": null,
+      "source": "claude-writer",
+      "author": "eval-user",
+      "origin": "local",
+      "visibility": "private",
+      "rev": 1,
+      "evidence": "observation",
+      "verified_at": null,
+      "verified_by": null,
+      "verified_note": null,
+      "refs": [
+        {
+          "kind": "file",
+          "value": "~/.claude/CLAUDE.md"
+        },
+        {
+          "kind": "file",
+          "value": "~/.codex/AGENTS.md"
+        }
+      ],
+      "merged_into": null,
+      "stale_at": null,
+      "stale_note": null,
+      "priority": null,
+      "freshness_at": null,
+      "number": null
+    }
+  ],
+  "edges": [],
+  "synonyms": [
+    {
+      "term": "auth",
+      "canonical": "authentication"
+    },
+    {
+      "term": "config",
+      "canonical": "configuration"
+    },
+    {
+      "term": "db",
+      "canonical": "database"
+    },
+    {
+      "term": "env",
+      "canonical": "environment"
+    },
+    {
+      "term": "gh",
+      "canonical": "github"
+    },
+    {
+      "term": "infra",
+      "canonical": "infrastructure"
+    },
+    {
+      "term": "js",
+      "canonical": "javascript"
+    },
+    {
+      "term": "k8s",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "kube",
+      "canonical": "kubernetes"
+    },
+    {
+      "term": "pg",
+      "canonical": "postgres"
+    },
+    {
+      "term": "postgresql",
+      "canonical": "postgres"
+    },
+    {
+      "term": "py",
+      "canonical": "python"
+    },
+    {
+      "term": "repo",
+      "canonical": "repository"
+    },
+    {
+      "term": "tf",
+      "canonical": "terraform"
+    },
+    {
+      "term": "ts",
+      "canonical": "typescript"
+    }
+  ]
+}

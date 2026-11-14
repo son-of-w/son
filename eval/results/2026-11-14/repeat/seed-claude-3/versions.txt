@@ -1,0 +1,9 @@
+scenario: seed
+writer: claude
+reader: none
+date: 2026-11-14T22:40:56Z
+son: son 0.1.15
+commit: 77b7b26
+claude: 2.1.325 (Claude Code)
+codex: codex-cli 0.169.0
+system: Darwin arm64

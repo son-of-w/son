@@ -1,0 +1,34 @@
+Skill: {'skill': 'son'}
+Bash: son context; son seed; ls -la notes; git diff CLAUDE.md
+Bash: cat AGENTS.md; echo ---; cat ~/.claude/CLAUDE.md; echo ---; cat ~/.codex/AGENTS.md; echo ---; cat notes/decisions.txt; echo ---; cat notes/deploy.md; echo ---; ls; son collections
+Bash: cat README.md; head -40 build.py; ls pages; son --help | head -60
+Bash: son remember pattern "Pages are Markdown in pages/; build.py generates the HTML" --check
+son remember decision "No JavaScript on the larkspur site" --check
+son remember pattern "Dates in pages are written year first, like 2026-03-01" --check
+son remember pattern "Run python3 build.py before calling a change done" --check
+son remember decision "Keep each image under 200 KB" --check
+son todo add "Add an RSS feed for the news pages" --check 2>&1 | head -5
+son remember pattern "How the larkspur site is deployed" --check
+son remember pattern "Commit messages are one plain sentence with no prefix" --check --collection all-projects
+son remember pattern "Ask before adding a new dependency to any project" --check --collection all-projects
+Bash: set -e
+R="--evidence observation --ref file:CLAUDE.md --ref file:AGENTS.md"
+son remember pattern "Pages are Markdown in pages/; build.py generates the HTML" --body "Site pages are Markdown files in pages/. Never write HTML by hand: build.py makes the output (into out/)." --tag pages,build,markdown $R --ref file:README.md
+son remember decision "No JavaScript on the larkspur site" --body "We decided to have no JavaScript on the site. Do not add any." --tag javascript,site $R
+son remember pattern "Dates in pages are written year first, like 2026-03-01" --body "Write dates in pages in the form 2026-03-01 (YYYY-MM-DD, year first)." --tag pages,dates $R
+son remember pattern "Run python3 build.py before calling a change done" --body "Run python3 build.py before you say a change is done." --tag build,workflow $R
+son remember decision "Keep each image under 200 KB" --body "Decided 2026-02-10: each image is kept under 200 KB. Larger images made the home page slow." --tag images,performance --evidence observation --ref file:notes/decisions.txt
+son todo add "Add an RSS feed for the news pages" --body "Noted as still to do on 2026-03-02." --tag rss,news --evidence observation --ref file:notes/decisions.txt
+son remember pattern "How the larkspur site is deployed" --body "Every Friday, the out/ folder is copied with rsync to the host larkspur.example.invalid, using the deploy account larkspur-deploy. The password is in the password manager, entry \"larkspur deploy\" (not stored here). Note: the source file says this setup is fictional." --tag deploy,rsync --evidence observation --ref file:notes/deploy.md
+G="--collection all-projects --evidence observation --ref file:~/.claude/CLAUDE.md --ref file:~/.codex/AGENTS.md"
+son remember pattern "Commit messages are one plain sentence with no prefix" --body "In every project, write a commit message as one plain sentence, with no prefix such as \"feat:\"." --tag git,commits $G
+son remember pattern "Ask before adding a new dependency to any project" --body "In every project, ask the user before adding a new dependency." --tag dependencies $G
+son context --max-chars 3000; son context --collection all-projects
+Bash: set -e
+son remember pattern "Pages are Markdown in pages/; build.py generates the HTML" --body "Site pages are Markdown files in pages/. Never write HTML by hand: build.py makes the output (into out/)." --tag pages,build,markdown --evidence observation --ref file:CLAUDE.md --ref file:AGENTS.md --ref file:README.md
+son remember decision "No JavaScript on the larkspur site" --body "We decided to have no JavaScript on the site. Do not add any." --tag javascript,site --evidence observation --ref file:CLAUDE.md --ref file:AGENTS.md
+son remember pattern "Dates in pages are written year first, like 2026-03-01" --body "Write dates in pages in the form 2026-03-01 (YYYY-MM-DD, year first)." --tag pages,dates --evidence observation --ref file:CLAUDE.md --ref file:AGENTS.md
+son remember pattern "Run python3 build.py before calling a change done" --body "Run python3 build.py before you say a change is done." --tag build,workflow --evidence observation --ref file:CLAUDE.md --ref file:AGENTS.md
+son remember pattern "Commit messages are one plain sentence with no prefix" --body "In every project, write a commit message as one plain sentence, with no prefix such as \"feat:\"." --tag git,commits --collection all-projects --evidence observation --ref file:~/.claude/CLAUDE.md --ref file:~/.codex/AGENTS.md
+son remember pattern "Ask before adding a new dependency to any project" --body "In every project, ask the user before adding a new dependency." --tag dependencies --collection all-projects --evidence observation --ref file:~/.claude/CLAUDE.md --ref file:~/.codex/AGENTS.md
+son context; son context --collection all-projects; git status --short
