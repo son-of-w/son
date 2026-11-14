@@ -10,6 +10,11 @@ A Rust CLI. The binary is `son`. Read [README.md](README.md) for current usage. 
 - Version 1 has no network calls. The central store is version 2 (see todo #13, `../todos/13.md`); do not start it unasked.
 - `son` must work on macOS, Linux and Windows. Do not use Unix-only paths or APIs; find the home directory with `agents::home()`. CI runs the checks on all three.
 
+## Changelog
+
+- `CHANGELOG.md` lists every change that a user can see. In the same commit as such a change, add a line under "Unreleased", in the group Added, Changed or Fixed. Write what the user sees, not what the code does.
+- At a release, rename "Unreleased" to the new version with the date, and start a new empty "Unreleased" above it.
+
 ## Compatibility
 
 From 1.0.0 on, the public surface only grows (see "What stays the same in version 1" in the README, and `../todos/archived/19.md`). `tests/compat.rs` pins it: commands and flags, error codes, exit statuses, environment variables, the JSON fields of each command, and databases and exports made by old releases.

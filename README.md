@@ -468,6 +468,12 @@ A local release holds only the binaries your machine can build. A Mac builds bot
 
 The Mac binaries are signed with a Developer ID Application certificate and notarized by Apple, so macOS runs a copy that was downloaded in a browser. On your own machine the script takes the certificate from your keychain and an App Store Connect API key from `SON_NOTARY_KEY_ID`, `SON_NOTARY_ISSUER` and `SON_NOTARY_KEY` (or `ASC_KEY_ID` and `ASC_ISSUER_ID`, with the key file in `~/.appstoreconnect/private_keys/`). Without them it packages the Mac binaries unsigned and says so. The Release workflow takes the same from repository secrets, which are listed in [the signing action](.github/actions/mac-signing/action.yml), and fails before anything is public if they are missing. To try the signing on GitHub without a release, run the Test signing workflow by hand: `gh workflow run "Test signing"`. It publishes nothing.
 
+## Project
+
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release.
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to build, check and send a change, and what is out of scope.
+- [SECURITY.md](SECURITY.md): how to report a security fault in private, and what `son` does and does not protect.
+
 ## License
 
 `son` is free and open source under the [MIT license](LICENSE). Copyright © 2026 Xon Designs LLC.
