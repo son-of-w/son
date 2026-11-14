@@ -4,6 +4,8 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+## 0.1.16 - 2026-11-14
+
 ### Added
 
 - `son uninstall` removes the skill files and the instruction blocks that `son init` wrote. The text around a block stays, and the database is not touched. `--dry-run` lists what would be done.
