@@ -535,6 +535,18 @@ pub fn open_read_only(path: &Path) -> Result<Option<Connection>> {
     }
 }
 
+/// Open an existing database of this schema to add a row to its activity
+/// log. Nothing is created or migrated: `None` when there is no database,
+/// or when it is of another schema.
+pub fn open_for_log(path: &Path) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .with_context(|| format!("cannot open database {}", path.display()))?;
+    Ok((user_version(&conn)? == SCHEMA_VERSION).then_some(conn))
+}
+
 /// How long to wait for another session to finish with the database: ten
 /// seconds, or the number of milliseconds in `SON_BUSY_MS`. The wait has an
 /// end so that a session that holds the lock for good makes the others fail

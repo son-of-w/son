@@ -294,10 +294,9 @@ fn todos_add_list_done() {
     assert!(all.contains("Write the README") && all.contains("Rotate the staging key"));
 
     sb.ok("alpha", &["todo", "done", &first]);
-    assert!(sb
-        .ok("alpha", &["todo", "list"])
-        .stdout
-        .contains("No todos"));
+    let closed = sb.ok("alpha", &["todo", "list"]).stdout;
+    assert!(closed.contains("No open todos"), "{closed}");
+    assert!(closed.contains("`son todo list --done`"), "{closed}");
     assert!(sb
         .ok("alpha", &["todo", "list", "--done"])
         .stdout
@@ -2950,6 +2949,39 @@ fn seed_lists_the_users_own_files_and_changes_nothing() {
     let empty = Sandbox::new("seed-empty");
     empty.ok("alpha", &["seed"]);
     assert!(!empty.root.join("son.db").exists());
+    // With a database there, the command is in the activity log.
+    let log = sb.ok("alpha", &["log", "--command", "seed"]).stdout;
+    assert!(log.contains("seed"), "{log}");
+    assert!(!log.contains("No commands"), "{log}");
+}
+
+#[test]
+fn todo_list_says_how_many_closed_todos_it_leaves_out() {
+    let sb = Sandbox::new("todo-closed");
+    sb.ok("alpha", &["todo", "add", "Book the sweep"]);
+    sb.ok("alpha", &["todo", "add", "Replace the batteries"]);
+    let open = sb.ok("alpha", &["todo", "list"]).stdout;
+    assert!(!open.contains("not shown"), "{open}");
+    sb.ok("alpha", &["todo", "done", "2"]);
+    let one = sb.ok("alpha", &["todo", "list"]).stdout;
+    assert!(one.contains("Book the sweep"), "{one}");
+    assert!(!one.contains("Replace the batteries"), "{one}");
+    assert!(
+        one.contains(
+            "1 todo that is done or dropped is not shown. `son todo list --done` shows it."
+        ),
+        "{one}"
+    );
+    let with_done = sb.ok("alpha", &["todo", "list", "--done"]).stdout;
+    assert!(with_done.contains("Replace the batteries"), "{with_done}");
+    assert!(!with_done.contains("not shown"), "{with_done}");
+    sb.ok("alpha", &["todo", "done", "1"]);
+    let none = sb.ok("alpha", &["todo", "list"]).stdout;
+    assert!(none.contains("No open todos"), "{none}");
+    assert!(
+        none.contains("2 todos that are done or dropped are not shown"),
+        "{none}"
+    );
 }
 
 #[test]
@@ -3082,7 +3114,13 @@ fn todos_have_numbers_parents_and_a_backlog() {
     // The list is a tree: children under their parent, and among the
     // children of one parent the most urgent first, then by number.
     let list = sb.ok("alpha", &["todo", "list"]).stdout;
-    let lines: Vec<&str> = list.lines().skip(1).collect();
+    // Below the tree, after an empty line, the list can say how many
+    // closed todos it leaves out.
+    let lines: Vec<&str> = list
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .collect();
     let want = [
         "- [ ] P1 #1 ",
         "  - [ ] P1 #1.1 ",

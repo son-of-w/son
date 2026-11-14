@@ -87,6 +87,37 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
     })
 }
 
+/// Write `son seed` to the activity log of a database that is there and
+/// is of this schema. The command must not make or upgrade a database, so
+/// with no such database nothing is written. Errors are ignored: the log
+/// must never make a command fail.
+fn log_seed(folder: Option<&str>, collection: &str, started: Instant, result: &Result<()>) {
+    if !activity::enabled() {
+        return;
+    }
+    let Ok(path) = db::path() else { return };
+    let Ok(Some(conn)) = db::open_for_log(&path) else {
+        return;
+    };
+    let draft = Draft {
+        project: Some(collection.to_string()),
+        detail: folder.map(str::to_string),
+        ..Draft::default()
+    };
+    let meta = Meta::from_env();
+    let _ = activity::record(
+        &conn,
+        &activity::Event {
+            command: "seed",
+            write: false,
+            source: meta.source.as_deref(),
+            ms: started.elapsed().as_millis() as i64,
+            error: result.as_ref().err().map(|err| format!("{err:#}")),
+            draft: &draft,
+        },
+    );
+}
+
 pub fn run(cli: Cli) -> Result<()> {
     // The parts of `son init` that only print need no database.
     if let Command::Init {
@@ -117,12 +148,13 @@ pub fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
     if let Command::Seed { folder, collection } = &cli.command {
-        // Only reads files. No database is opened or made.
-        return crate::seed::run(
-            folder.as_deref(),
-            &project_name(collection.as_deref())?,
-            cli.json,
-        );
+        // Only reads files. No database is made or upgraded; when one is
+        // there, the command is written to its activity log.
+        let started = Instant::now();
+        let name = project_name(collection.as_deref())?;
+        let result = crate::seed::run(folder.as_deref(), &name, cli.json);
+        log_seed(folder.as_deref(), &name, started, &result);
+        return result;
     }
     if let Command::Uninstall {
         agent,
@@ -1895,23 +1927,28 @@ impl App {
             match store::find_project(&self.conn, &name)? {
                 Some(id) => (name, Some(id)),
                 None => {
-                    render::todos(&[], &name, self.json);
+                    render::todos(&[], &name, 0, self.json);
                     return Ok(());
                 }
             }
         };
         let mut todos = store::list_nodes(&self.conn, project_id.as_deref(), Some("todo"), false)?;
-        if !done {
-            todos.retain(|t| t.status.as_deref() == Some("open"));
-        }
         todos.retain(|t| store::has_tags(t, tags));
+        // How many are left out because they are not open: the list says
+        // so, or a reader takes "none listed" for "none done".
+        let mut closed = 0;
+        if !done {
+            let all = todos.len();
+            todos.retain(|t| t.status.as_deref() == Some("open"));
+            closed = all - todos.len();
+        }
         // The most urgent first, then the oldest: a todo list reads top down.
         todos.sort_by(store::todo_order);
         self.note(|draft| {
             draft.project = project_id.is_some().then(|| scope.clone());
             draft.results = Some(todos.len() as i64);
         });
-        render::todos(&todos, &scope, self.json);
+        render::todos(&todos, &scope, closed, self.json);
         Ok(())
     }
 

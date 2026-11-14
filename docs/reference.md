@@ -126,7 +126,7 @@ son stats [--days 30 | --all]
 
 Types are `collection`, `todo`, `decision`, `pattern`, `fact` and `note`. Every command takes `--json`. `--body -` reads the body from stdin. `--allow-secret` saves text that the [secret check](../README.md#secrets) refuses. An `<id>` is the 8-character id that `son` prints.
 
-`son list` shows nodes, most recently changed first. `son log` shows every command that was run: what was recalled, how many results it gave, what was saved, and what failed. `son stats` shows how much is stored and how `son` is being used: commands per day, how often a recall finds something, the queries that found nothing, writes for each recall, and recall speed.
+`son list` shows nodes, most recently changed first. `son log` shows the commands that read or changed what is stored, and `son seed`: what was recalled, how many results it gave, what was saved, and what failed. The commands that only look at the setup or at the activity itself are not in it: `son init`, `son uninstall`, `son doctor`, `son list`, `son log`, `son stats`, `son completions`, and a `--check`. `son stats` shows how much is stored and how `son` is being used: commands per day, how often a recall finds something, the queries that found nothing, writes for each recall, and recall speed.
 
 ### Environment
 

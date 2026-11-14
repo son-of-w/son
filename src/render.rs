@@ -735,15 +735,27 @@ pub fn todo_tree(nodes: &[Node]) -> Vec<(usize, &Node)> {
     out
 }
 
-pub fn todos(nodes: &[Node], scope: &str, json: bool) {
+/// `closed` is how many todos are left out because they are done or
+/// dropped; 0 when they are in the list or there are none.
+pub fn todos(nodes: &[Node], scope: &str, closed: usize, json: bool) {
     let tree = todo_tree(nodes);
     if json {
         let list: Vec<Value> = tree.iter().map(|(_, node)| node_json(node)).collect();
         print_json(&Value::Array(list));
         return;
     }
+    let left_out = match closed {
+        0 => None,
+        1 => Some("1 todo that is done or dropped is not shown. `son todo list --done` shows it.".to_string()),
+        many => Some(format!(
+            "{many} todos that are done or dropped are not shown. `son todo list --done` shows them."
+        )),
+    };
     if nodes.is_empty() {
-        println!("No todos for {scope}.");
+        match left_out {
+            Some(line) => println!("No open todos for {scope}.\n{line}"),
+            None => println!("No todos for {scope}."),
+        }
         return;
     }
     println!("# Todos: {scope}");
@@ -759,6 +771,9 @@ pub fn todos(nodes: &[Node], scope: &str, json: bool) {
             node.project_name(),
             tags(node)
         );
+    }
+    if let Some(line) = left_out {
+        println!("\n{line}");
     }
 }
 
