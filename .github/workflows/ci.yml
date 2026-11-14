@@ -109,5 +109,6 @@ jobs:
           son recall deb | grep -q "installed from the deb"
           test -f /usr/share/bash-completion/completions/son
           sudo dpkg -r son
-          ! command -v son
+          # A line that starts with ! cannot fail a step, so test it this way.
+          if command -v son; then echo "son is still installed after dpkg -r" >&2; exit 1; fi
           test -f "$SON_DB"
