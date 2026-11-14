@@ -112,56 +112,13 @@ jobs:
           SON_REQUIRE_ALL: "true"
         run: bash scripts/release.sh finish
 
-  # After the release is public: tell the places people install from.
-  # Each step needs a secret, and is left out with a note when the secret
-  # is not set, so a release never fails here for a channel that is not
-  # set up yet.
-  #   TAP_TOKEN             a token that can push to son-of-w/homebrew-tap
-  #                         and son-of-w/scoop-bucket
-  #   CARGO_REGISTRY_TOKEN  a crates.io token that can publish son-of-w
+  # After the release is public: the Homebrew tap, the Scoop bucket and
+  # crates.io. The steps are in channels.yml, which can also be run by
+  # hand for a tag when one of them failed.
   channels:
-    name: Update Homebrew, Scoop and crates.io
+    name: Channels
     needs: publish
-    runs-on: ubuntu-latest
-    env:
-      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Homebrew tap
-        if: env.TAP_TOKEN != ''
-        run: |
-          version="${TAG#v}"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/son-of-w/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          bash scripts/homebrew-formula.sh "$version" > tap/Formula/son.rb
-          cd tap
-          git config user.name "son release"
-          git config user.email "contact@xondesigns.com"
-          git add Formula/son.rb
-          git diff --cached --quiet || git commit -m "son $version"
-          git push
-
-      - name: Scoop bucket
-        if: env.TAP_TOKEN != ''
-        run: |
-          version="${TAG#v}"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/son-of-w/scoop-bucket.git" bucket
-          mkdir -p bucket/bucket
-          bash scripts/scoop-manifest.sh "$version" > bucket/bucket/son.json
-          cd bucket
-          git config user.name "son release"
-          git config user.email "contact@xondesigns.com"
-          git add bucket/son.json
-          git diff --cached --quiet || git commit -m "son $version"
-          git push
-
-      - name: crates.io
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish --locked
-
-      - name: Say what was left out
-        run: |
-          [ -n "$TAP_TOKEN" ] || echo "::notice::TAP_TOKEN is not set: the Homebrew tap and the Scoop bucket were not updated"
-          [ -n "$CARGO_REGISTRY_TOKEN" ] || echo "::notice::CARGO_REGISTRY_TOKEN is not set: nothing was published to crates.io"
+    uses: ./.github/workflows/channels.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

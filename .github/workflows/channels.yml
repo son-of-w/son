@@ -1,0 +1,105 @@
+name: Channels
+
+# Update the package channels for a release that is public: the Homebrew
+# tap, the Scoop bucket and crates.io.
+#
+# The Release workflow calls this after it has published a release. Run it
+# by hand to do the same again for a tag, when a step failed (a token that
+# ran out, a registry that was down):
+#   gh workflow run Channels -R son-of-w/son -f tag=v1.0.0
+# Each step is safe to run again: the tap and the bucket get a commit only
+# when the file changes, and a version that is on crates.io is left alone.
+#
+# The secrets, in Settings -> Secrets and variables -> Actions. A step
+# whose secret is not set is left out, and the last step says so.
+#   TAP_TOKEN             a token that can write to son-of-w/homebrew-tap
+#                         and son-of-w/scoop-bucket
+#   CARGO_REGISTRY_TOKEN  a crates.io token that can publish son-of-w
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag of a public release, for example v1.0.0"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      TAP_TOKEN:
+        required: false
+      CARGO_REGISTRY_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  channels:
+    name: Update Homebrew, Scoop and crates.io
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      # The source of the tag, so that what goes to crates.io is the
+      # release and not a later commit.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      # The tap and the bucket are cloned outside the source folder:
+      # `cargo publish` refuses a folder that holds files git does not know.
+      - name: Homebrew tap
+        if: env.TAP_TOKEN != ''
+        run: |
+          version="${TAG#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/son-of-w/homebrew-tap.git" "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          bash scripts/homebrew-formula.sh "$version" > "$RUNNER_TEMP/tap/Formula/son.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "son release"
+          git config user.email "contact@xondesigns.com"
+          git add Formula/son.rb
+          git diff --cached --quiet || git commit -m "son $version"
+          git push
+
+      - name: Scoop bucket
+        if: env.TAP_TOKEN != ''
+        run: |
+          version="${TAG#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/son-of-w/scoop-bucket.git" "$RUNNER_TEMP/bucket"
+          mkdir -p "$RUNNER_TEMP/bucket/bucket"
+          bash scripts/scoop-manifest.sh "$version" > "$RUNNER_TEMP/bucket/bucket/son.json"
+          cd "$RUNNER_TEMP/bucket"
+          git config user.name "son release"
+          git config user.email "contact@xondesigns.com"
+          git add bucket/son.json
+          git diff --cached --quiet || git commit -m "son $version"
+          git push
+
+      - name: crates.io
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          version="${TAG#v}"
+          if curl -fsS -o /dev/null -A "son release workflow" "https://crates.io/api/v1/crates/son-of-w/$version"; then
+            echo "::notice::son-of-w $version is on crates.io already; nothing was published"
+          else
+            cargo publish --locked
+          fi
+
+      - name: Say what was left out
+        if: always()
+        run: |
+          [ -n "$TAP_TOKEN" ] || echo "::notice::TAP_TOKEN is not set: the Homebrew tap and the Scoop bucket were not updated"
+          [ -n "$CARGO_REGISTRY_TOKEN" ] || echo "::notice::CARGO_REGISTRY_TOKEN is not set: nothing was published to crates.io"
