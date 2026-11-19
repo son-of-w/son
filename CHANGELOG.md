@@ -4,6 +4,10 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+### Fixed
+
+- In `son init`, the question "Which agents should use son?" was printed again at each key press in a terminal narrower than 80 columns. The question is now short enough to stay on one line.
+
 ## 1.1.0 - 2026-11-19
 
 ### Added

@@ -281,8 +281,13 @@ fn choose_agents(opts: &Options) -> Result<Vec<Agent>> {
         })
         .collect();
     let checked: Vec<bool> = all.iter().map(Agent::detected).collect();
+    // The prompt must fit on one line of the terminal, with the page
+    // number that is added to it: the list is drawn again at each key
+    // press, and a prompt that wraps is then left behind once for each
+    // press. So the keys are named on a line of their own, printed once.
+    eprintln!("Space selects, Enter confirms, the arrow keys move.");
     let picked = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which agents should use son? (space to select, enter to confirm)")
+        .with_prompt("Which agents should use son?")
         .items(&labels)
         .defaults(&checked)
         .max_length(14)
@@ -410,11 +415,13 @@ fn choose_files(opts: &Options, scope: Scope, root: &Path) -> Result<bool> {
     if opts.yes || !can_ask() || project::shared(root).is_some() {
         return Ok(false);
     }
+    // A short prompt, for the same reason as in `choose_agents`.
+    eprintln!(
+        "son can keep this project's memory as files in {}, to commit and share through git.",
+        short(&root.join(crate::files::DEFAULT_FOLDER))
+    );
     dialoguer::Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!(
-            "Keep this project's memory as files in {}, to commit and share through git?",
-            short(&root.join(crate::files::DEFAULT_FOLDER))
-        ))
+        .with_prompt("Keep the memory as files?")
         .default(false)
         .interact()
         .context("the question about files was cancelled")
