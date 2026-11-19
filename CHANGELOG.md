@@ -4,6 +4,8 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+## 1.1.0 - 2026-11-19
+
 ### Added
 
 - A collection can be kept as files in its project folder, to commit and share through git. `son files on` turns it on: it writes `files = .son-data` to the `.son` file of the project and one JSON file for each node to that folder. From then on every write updates the files, and every command first reads the files that changed, so a `git pull` brings the memory of the others. `son files` shows the state, and `son files off` turns it off. The database stays the place every command reads from.
