@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The schema version this son reads and writes.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// Version 1 schema. The `origin`, `author`, `visibility` and `rev` columns
 /// prepare for the version 2 central store; `rev` already tracks edits.
@@ -237,6 +237,45 @@ CREATE TABLE todo_numbers (
     parent      TEXT NOT NULL DEFAULT '',
     last        INTEGER NOT NULL,
     PRIMARY KEY (project_id, parent)
+);
+";
+
+/// Version 13: what a database remembers about shared folders (see
+/// `files.rs`). All three tables are local: they are not in an export.
+///
+/// `shared_folders`: each folder where a collection is kept as files, so
+/// that a write from another folder can update them. `state` is a short
+/// text that changes when the nodes of the collection change.
+///
+/// `shared_files`: each node file as it was last read or written. `full`
+/// and `content` are hashes of the node (`content` leaves the stale mark
+/// and the verification out); `problem` is set for a file that was skipped.
+///
+/// `shared_purged`: the ids that were purged from a shared collection.
+const SCHEMA_V13: &str = "
+CREATE TABLE shared_folders (
+    root        TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    seen_at     TEXT NOT NULL,
+    state       TEXT
+);
+CREATE TABLE shared_files (
+    root        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime       INTEGER NOT NULL,
+    format      INTEGER NOT NULL,
+    full        TEXT,
+    content     TEXT,
+    updated_at  TEXT,
+    canonical   INTEGER NOT NULL DEFAULT 1,
+    problem     TEXT,
+    PRIMARY KEY (root, name)
+);
+CREATE TABLE shared_purged (
+    project_id  TEXT NOT NULL,
+    id          TEXT NOT NULL,
+    PRIMARY KEY (project_id, id)
 );
 ";
 
@@ -713,6 +752,9 @@ fn migrate(conn: &Connection, database: &Path, copy: bool) -> Result<Opened> {
         if version < 12 {
             conn.execute_batch(SCHEMA_V12)?;
             numbers_from_titles(conn)?;
+        }
+        if version < 13 {
+            conn.execute_batch(SCHEMA_V13)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())

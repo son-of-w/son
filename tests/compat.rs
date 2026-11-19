@@ -442,6 +442,10 @@ fn json_fields_stay() {
     );
     see("reindex", sb.json(&["reindex"]));
     see("uninstall", sb.json(&["uninstall", "--dry-run"]));
+    // Last: from here on the folder is kept as files, and every command
+    // in it syncs.
+    see("files", sb.json(&["files"]));
+    see("files on", sb.json(&["files", "on"]));
 
     let all: Vec<String> = lines.into_iter().collect();
     pinned("json-fields.txt", &format!("{}\n", all.join("\n")));

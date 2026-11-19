@@ -4,7 +4,7 @@ use crate::activity::{self, Draft, EventFilter, NodeFilter};
 use crate::agents::Scope;
 use crate::analyze::Analyzer;
 use crate::cli::{
-    Cli, Command, Evidence, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand,
+    Cli, Command, Evidence, FilesCommand, NodeType, Relation, ScopeArg, SynonymCommand, TodoCommand,
 };
 use crate::error::coded;
 use crate::history::{self, Recorder};
@@ -12,7 +12,7 @@ use crate::render::{self, Context as ProjectContext};
 use crate::search;
 use crate::secrets;
 use crate::store::{self, Meta, NewNode, Node, Ref, TODO_STATUSES};
-use crate::{db, instructions, project, report, setup, transfer};
+use crate::{db, files, instructions, project, report, setup, transfer};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use rusqlite::{Connection, OptionalExtension};
@@ -48,6 +48,7 @@ fn log_name(command: &Command) -> Option<(&'static str, bool)> {
         | Command::Completions { .. }
         | Command::Seed { .. }
         | Command::Doctor
+        | Command::Files { .. }
         | Command::List { .. }
         | Command::Log { .. }
         | Command::Stats { .. } => return None,
@@ -246,7 +247,45 @@ pub fn run(cli: Cli) -> Result<()> {
     };
 
     let logged = log_name(&cli.command).filter(|_| activity::enabled());
+    // A collection that is kept as files in this folder: read what
+    // changed there first, so that the command sees it. `son init` and
+    // `son files` look after the folder themselves.
+    let syncs = !matches!(cli.command, Command::Init { .. } | Command::Files { .. });
+    let writes = log_name(&cli.command).is_some_and(|(_, write)| write);
+    let mut told: Vec<String> = Vec::new();
+    if syncs {
+        if let Some(shared) = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| project::shared(&cwd))
+        {
+            // A command that only reads does not wait for the database.
+            let result = files::sync(
+                &app.conn,
+                &app.an,
+                &app.meta,
+                &shared,
+                writes,
+                files::Scope::Changed,
+            );
+            tell_sync(&shared, &result, &mut told);
+        }
+    }
+    let op = files::last_op(&app.conn);
     let result = dispatch(&app, &path, cli.command);
+    if syncs && writes {
+        // A command that changes the store: bring every folder that this
+        // database knows up to date, wherever the command ran.
+        let changed = files::changed_since(&app.conn, op);
+        for (shared, synced) in files::sync_known(&app.conn, &app.an, &app.meta, &changed) {
+            tell_sync(&shared, &synced, &mut told);
+            if app.allow_secret && synced.is_ok_and(|summary| summary.written > 0) {
+                eprintln!(
+                    "son: --allow-secret: what was saved is now in {}, a folder that is shared",
+                    shared.folder
+                );
+            }
+        }
+    }
     if result
         .as_ref()
         .is_err_and(|err| crate::error::code_of(err) == "possible_secret")
@@ -272,6 +311,35 @@ pub fn run(cli: Cli) -> Result<()> {
     result
 }
 
+/// Say on stderr what a sync of a shared folder read, and which files it
+/// skipped. Each line is said once in a command. The output of the
+/// command itself stays as it is.
+fn tell_sync(shared: &project::Shared, result: &Result<files::Summary>, told: &mut Vec<String>) {
+    let mut say = |line: String| {
+        if !told.contains(&line) {
+            eprintln!("son: {line}");
+            told.push(line);
+        }
+    };
+    match result {
+        Err(err) => say(format!(
+            "the shared folder {} was not read or written: {err:#}",
+            shared.folder
+        )),
+        Ok(summary) => {
+            if let Some(line) = summary.line(&shared.folder) {
+                say(line);
+            }
+            for skipped in summary.skipped.iter().filter(|s| s.needs_repair()) {
+                say(format!(
+                    "skipped {}/nodes/{}: {}",
+                    shared.folder, skipped.file, skipped.reason
+                ));
+            }
+        }
+    }
+}
+
 fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
     match command {
         Command::Init {
@@ -284,6 +352,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             todo_skill,
             todo_skill_name,
             overwrite_todo_skill,
+            files,
             ..
         } => {
             if db_only {
@@ -303,10 +372,13 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
                 (Some(ScopeArg::Project), _) => Some(Scope::Project),
                 (None, false) => None,
             };
+            let share = |root: &Path| app.files_on(root, None).map(|(status, _)| status);
             setup::run(
                 path,
                 &app.opened,
+                &share,
                 &setup::Options {
+                    files,
                     agents: agent,
                     scope,
                     yes,
@@ -569,6 +641,7 @@ fn dispatch(app: &App, path: &Path, command: Command) -> Result<()> {
             report::stats(&stats, path, &setup::installed_files(), app.json);
             Ok(())
         }
+        Command::Files { command } => app.files(command),
         Command::Reindex => {
             let count = store::write(&app.conn, || store::reindex_all(&app.conn, &app.an))?;
             if app.json {
@@ -722,6 +795,133 @@ fn parse_refs(texts: &[String]) -> Result<Vec<Ref>> {
 }
 
 impl App {
+    /// `son files`: show, turn on or turn off the shared folder of this
+    /// project folder.
+    fn files(&self, command: Option<FilesCommand>) -> Result<()> {
+        let cwd = std::env::current_dir().context("cannot read the current directory")?;
+        let io = |err: std::io::Error, path: &Path| {
+            coded(
+                "io_error",
+                format!("cannot write {}: {err}", path.display()),
+            )
+        };
+        match command {
+            None => {
+                let shared = project::shared(&cwd);
+                let synced = shared.as_ref().map(|shared| {
+                    files::sync(
+                        &self.conn,
+                        &self.an,
+                        &self.meta,
+                        shared,
+                        true,
+                        files::Scope::All,
+                    )
+                });
+                if let (Some(shared), Some(synced)) = (&shared, &synced) {
+                    tell_sync(shared, synced, &mut Vec::new());
+                }
+                let status = files::status(&self.conn, shared.as_ref())?;
+                report::files(&status, None, self.json);
+                Ok(())
+            }
+            Some(FilesCommand::On { folder }) => {
+                let (status, summary) = self.files_on(&cwd, folder)?;
+                report::files(&status, Some(&summary), self.json);
+                Ok(())
+            }
+            Some(FilesCommand::Off) => {
+                let Some(shared) = project::shared(&cwd) else {
+                    report::files(&files::status(&self.conn, None)?, None, self.json);
+                    return Ok(());
+                };
+                let path = shared.root.join(project::SETTINGS);
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let new = project::with_setting(&text, project::FILES_KEY, None);
+                std::fs::write(&path, new).map_err(|err| io(err, &path))?;
+                files::forget(&self.conn, &shared.root)?;
+                if self.json {
+                    report::files(&files::status(&self.conn, None)?, None, true);
+                } else {
+                    println!("files: off");
+                    println!(
+                        "The folder {} stays as it is. The nodes stay in the database. \
+                         Delete the folder if you do not want it.",
+                        shared.folder
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Turn the shared folder on for the project that `cwd` is in: write
+    /// the setting to `.son`, and write the files.
+    fn files_on(
+        &self,
+        cwd: &Path,
+        folder: Option<String>,
+    ) -> Result<(files::Status, files::Summary)> {
+        let io = |err: std::io::Error, path: &Path| {
+            coded(
+                "io_error",
+                format!("cannot write {}: {err}", path.display()),
+            )
+        };
+        // The `.son` of this project when there is one, else a
+        // new one in the project root.
+        let project_root = project::root(cwd);
+        let root = project::settings_root(cwd)
+            .filter(|found| found.starts_with(&project_root))
+            .unwrap_or(project_root);
+        let path = root.join(project::SETTINGS);
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let collection = match project::setting(&text, "collection") {
+            Some(name) => name,
+            None => project::detect(&root),
+        };
+        let folder = folder
+            .map(|folder| folder.trim().trim_end_matches(['/', '\\']).to_string())
+            .filter(|folder| !folder.is_empty())
+            .or_else(|| project::setting(&text, project::FILES_KEY))
+            .unwrap_or_else(|| files::DEFAULT_FOLDER.to_string());
+        let shared = project::Shared {
+            root: root.clone(),
+            folder,
+            collection: Some(collection.clone()),
+        };
+        let dir = shared.dir().map_err(|err| coded("invalid_request", err))?;
+        if dir.is_file() {
+            return Err(coded(
+                "invalid_request",
+                format!("{} is a file, not a folder", dir.display()),
+            ));
+        }
+        // The name goes in the file: another clone can have
+        // another folder name, and must get the same collection.
+        let mut new = text.clone();
+        if project::setting(&new, "collection").is_none() {
+            if new.is_empty() {
+                new.push_str("# Settings for son in this folder.\n");
+            }
+            new = project::with_setting(&new, "collection", Some(&collection));
+        }
+        new = project::with_setting(&new, project::FILES_KEY, Some(&shared.folder));
+        if new != text {
+            std::fs::write(&path, new).map_err(|err| io(err, &path))?;
+        }
+        let summary = files::sync(
+            &self.conn,
+            &self.an,
+            &self.meta,
+            &shared,
+            true,
+            files::Scope::All,
+        )?;
+        let status = files::status(&self.conn, Some(&shared))?;
+        Ok((status, summary))
+    }
+
     /// Add to what the activity log will say about this command.
     fn note(&self, fill: impl FnOnce(&mut Draft)) {
         fill(&mut self.draft.borrow_mut());
@@ -1546,6 +1746,7 @@ impl App {
         self.note_node(&node);
         store::write(&self.conn, || {
             if purge {
+                files::note_purge(&self.conn, &node)?;
                 return history::purge(&self.conn, &id);
             }
             let mut rec = Recorder::new(&self.conn, "drop");
@@ -2069,6 +2270,15 @@ impl App {
             store::get_node(&self.conn, &from)?,
             store::get_node(&self.conn, &to)?,
         );
+        if add
+            && from.project_id != to.project_id
+            && !files::shared_ids(&self.conn, &[&from.id, &to.id])?.is_empty()
+        {
+            eprintln!(
+                "son: this link is kept in this database only: the two nodes are in different \
+                 collections, and a shared folder holds the links inside one collection"
+            );
+        }
         self.note(|draft| {
             draft.node_id = Some(from.id.clone());
             draft.detail = Some(format!("{} {} {}", from.title, relation.as_str(), to.title));

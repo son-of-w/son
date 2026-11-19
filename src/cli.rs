@@ -142,6 +142,11 @@ pub enum Command {
         /// Installs the todo skill
         #[arg(long)]
         overwrite_todo_skill: bool,
+        /// With --scope project: also keep this project's collection as
+        /// files in the folder, to share it through git (see `son files`).
+        /// In a terminal, init asks
+        #[arg(long)]
+        files: bool,
         /// Only create the database
         #[arg(long)]
         db_only: bool,
@@ -492,6 +497,18 @@ pub enum Command {
     },
     /// Rebuild the search index
     Reindex,
+    /// Keep this collection as files in the project folder, to share it through git
+    ///
+    /// With no command this shows whether it is on here. When it is on,
+    /// the folder holds one file for each node of the collection, and son
+    /// keeps the files and the database in step: a write updates the
+    /// files, and a command first reads the files that changed (after a
+    /// git pull, say). The setting is the line `files = <folder>` in the
+    /// `.son` file of the project folder.
+    Files {
+        #[command(subcommand)]
+        command: Option<FilesCommand>,
+    },
     /// List nodes, most recently changed first
     List {
         /// Only this collection (default: every collection)
@@ -624,6 +641,18 @@ pub enum TodoCommand {
     },
     /// Open a todo again that was done or dropped
     Reopen { id: String },
+}
+
+#[derive(Subcommand)]
+pub enum FilesCommand {
+    /// Turn it on: write the setting to `.son` and write the files
+    On {
+        /// The folder for the files, inside the project folder
+        /// (default: .son-data)
+        folder: Option<String>,
+    },
+    /// Turn it off: take the setting out of `.son`. The folder stays
+    Off,
 }
 
 #[derive(Subcommand)]

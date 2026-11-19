@@ -53,6 +53,7 @@ From 1.0.0 on, the public surface only grows (see "What stays the same in versio
 - `src/uninstall.rs` — `son uninstall`: remove the skill files and the instruction blocks
 - `src/instructions.rs` — the skill file and the instruction block, and how they are written
 - `src/todo_skill.md` — the text of the todo skill that `son init --todo-skill` installs
+- `src/files.rs` — a collection kept as files in its project folder (`son files`), and the sync of the files with the database
 - `src/transfer.rs` — JSON export and import
 - `src/backup.rs` — `son backup`, and restoring a backup through `son import`
 - `src/doctor.rs` — `son doctor`: read-only checks of the database and the agent setup

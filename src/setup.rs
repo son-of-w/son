@@ -30,6 +30,9 @@ pub struct Options {
     /// From `--overwrite-todo-skill`: replace a skill of that name that
     /// is not son's.
     pub overwrite_todo_skill: bool,
+    /// From `--files`: with the project scope, keep the collection of the
+    /// project as files in its folder, and do not ask.
+    pub files: bool,
 }
 
 /// What was done for one agent.
@@ -389,7 +392,40 @@ fn step_line(label: &str, step: &Step) -> String {
     }
 }
 
-pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Result<()> {
+/// With the project scope: should the collection of the project be kept
+/// as files in its folder (see `files.rs`)? `--files` says yes. In a
+/// terminal the user is asked, unless it is on already. Without a
+/// terminal, and with `--yes`, the answer is no: nothing is shared that
+/// was not asked for.
+fn choose_files(opts: &Options, scope: Scope, root: &Path) -> Result<bool> {
+    if scope != Scope::Project {
+        if opts.files {
+            bail!("--files needs --scope project: files are kept in a project folder");
+        }
+        return Ok(false);
+    }
+    if opts.files {
+        return Ok(true);
+    }
+    if opts.yes || !can_ask() || project::shared(root).is_some() {
+        return Ok(false);
+    }
+    dialoguer::Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!(
+            "Keep this project's memory as files in {}, to commit and share through git?",
+            short(&root.join(crate::files::DEFAULT_FOLDER))
+        ))
+        .default(false)
+        .interact()
+        .context("the question about files was cancelled")
+}
+
+pub fn run(
+    database: &Path,
+    opened: &crate::db::Opened,
+    share: &dyn Fn(&Path) -> Result<crate::files::Status>,
+    opts: &Options,
+) -> Result<()> {
     if !opts.json {
         println!("database ready: {}", database.display());
         println!("{}", opened.line());
@@ -407,6 +443,7 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
     let root = project_root()?;
     let chosen = choose_agents(opts)?;
     let scope = choose_scope(opts, &root)?;
+    let files = choose_files(opts, scope, &root)?;
 
     // Look at every instruction file before any file is written. One file
     // with marks that do not make one block stops the whole run.
@@ -449,6 +486,9 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
         })
         .count();
 
+    // After the agents: a file that could not be written is reported
+    // below, and the shared folder is still made.
+    let shared = if files { Some(share(&root)) } else { None };
     if opts.json {
         let installs: Vec<Value> = done
             .iter()
@@ -470,6 +510,7 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
             "scope": scope.as_str(),
             "project_root": (scope == Scope::Project).then(|| root.display().to_string()),
             "installs": installs,
+            "files": shared.as_ref().and_then(|shared| shared.as_ref().ok()),
         }));
     } else {
         match scope {
@@ -484,6 +525,15 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
                 println!("{}", step_line("todo", todo));
             }
         }
+        if let Some(Ok(status)) = &shared {
+            println!(
+                "files: on for collection '{}' in {} ({} node file(s)). \
+                 Commit the .son file and the folder to share them through git.",
+                status.collection.as_deref().unwrap_or("?"),
+                status.folder.as_deref().unwrap_or("?"),
+                status.nodes
+            );
+        }
         println!(
             "\nRun `son init` again at any time to add agents or bring these files up to date."
         );
@@ -495,6 +545,9 @@ pub fn run(database: &Path, opened: &crate::db::Opened, opts: &Options) -> Resul
                  To bring what is in them into son, ask your agent to run `son seed`."
             );
         }
+    }
+    if let Some(Err(err)) = shared {
+        return Err(err.context("the agents are set up, but the files were not turned on"));
     }
     if failed > 0 {
         // With --json the report above went to stdout as one valid object;

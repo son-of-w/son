@@ -13,6 +13,11 @@ drop: id result short_id
 edit (moved): author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs renumbered_from rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
 edit.refs[]: kind value
 edit: author body collection collection_id created_at deleted_at evidence freshness_at id merged_into number priority refs rev short_id source stale_at stale_note status tags title type updated_at verified_at verified_by verified_note
+files on.files: collection folder nodes on root skipped
+files on.sync: added purged renumbered skipped updated written
+files on: files sync
+files.files: collection folder nodes on root skipped
+files: files sync
 history --op.links[]: added from relation to
 history --op: after at author before kind links node op other_nodes purged source undoes undone_by
 history.items[].after.refs[]: kind value
@@ -33,7 +38,7 @@ init.installs[].rules: path result
 init.installs[].skill: path result
 init.installs[].todo_skill: path result
 init.installs[]: agent rules skill todo_skill
-init: database database_state installs project_root scope
+init: database database_state files installs project_root scope
 link: from relation result to
 list: items limit page pages total
 log.items[]: at close collection command detail error kind ms node_id ok results source

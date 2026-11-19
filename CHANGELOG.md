@@ -4,6 +4,16 @@ Every change that a user of `son` can see is listed here. The layout follows [Ke
 
 ## Unreleased
 
+### Added
+
+- A collection can be kept as files in its project folder, to commit and share through git. `son files on` turns it on: it writes `files = .son-data` to the `.son` file of the project and one JSON file for each node to that folder. From then on every write updates the files, and every command first reads the files that changed, so a `git pull` brings the memory of the others. `son files` shows the state, and `son files off` turns it off. The database stays the place every command reads from.
+- Two people who each add a node get both. When both changed one node, the later edit stays. A purge (`son drop --purge`) is passed on to the others. A file that cannot be read (after a git conflict, say) is skipped with a warning and never stops a command; `son doctor` lists such files in a new check, `shared folder`.
+- `son init --scope project` asks in a terminal if the project's memory is to be kept as files; `--files` says yes without the question.
+
+### Changed
+
+- The database schema is now version 13. As with every schema upgrade, a copy of the database is written first, and an older `son` cannot open the upgraded database.
+
 ## 1.0.0 - 2026-11-14
 
 The first stable release. From this version on, every 1.x release keeps the commands, flags, exit statuses, error codes, environment variables, JSON fields and the export format as they are; see "What stays the same in version 1" in the README.

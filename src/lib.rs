@@ -9,6 +9,7 @@ pub mod cli;
 pub mod db;
 pub mod doctor;
 pub mod error;
+pub mod files;
 pub mod history;
 pub mod instructions;
 pub mod project;

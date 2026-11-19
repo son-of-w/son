@@ -13,8 +13,27 @@ The full detail of how `son` works. The [README](../README.md) has the short ver
 
 - **Every node belongs to a collection.** A collection is a group of nodes: a code repository, or any other subject such as `household` or `travel`. `son collections` lists them.
 - **The current collection is found for you.** It is, in this order: `--collection <name>` on the command; the `SON_COLLECTION` environment variable; a `.son` file in the directory or a parent, with the line `collection = <name>`; the git remote's repo name; the git root's directory name; the current directory's name. So a coding agent needs to do nothing, and an agent that does not work in a repository names its collection once and gets the same one from any directory.
-- **`.son` is the settings file for a folder.** It holds `key = value` lines, with `#` for comments; `collection` is its only key now.
+- **`.son` is the settings file for a folder.** It holds `key = value` lines, with `#` for comments. The keys are `collection` and `files` (see [Shared folder](#shared-folder)).
 - **Collections organize; they do not restrict.** Every agent that uses the database can read every collection. A collection is not a security boundary.
+
+### Shared folder
+
+A collection can be kept as files in its project folder, so that it can be committed and shared through git. The database stays the place every command reads from. The folder is a second copy of one collection, and `son` keeps the two in step.
+
+- **Turn it on with `son files on`.** It writes `files = .son-data` to the `.son` file of the project (and `collection = <name>`, if the file does not name the collection), and writes the files. Give another folder if you want one: `son files on docs/memory`. The folder must be inside the project folder. `son files` shows the state, and `son files off` takes the setting out; the folder and the nodes stay. `son init --scope project` asks in a terminal if you want this, and `--files` says yes without the question.
+- **Commit `.son` and the folder.** A teammate who clones or pulls has the setting and the files. Their first `son` command in the folder brings the nodes into their database.
+- **What is in the folder.** `nodes/<id>.json` holds one node: its text, tags, evidence, todo number, priority and status, its stale mark and verification, its author, and the links that start at it. `purged/<id>` is an empty file for each node that was purged. `collection.json` holds the format version and the id of the collection. All memories and todos of the collection are there, also done and dropped ones. What must stay off git belongs in another collection.
+- **What is not in the folder.** History, the activity log, synonyms, and links to nodes of other collections. These stay in the database of the machine that made them.
+- **A write updates the files.** Every command that changes a node of the collection writes its file, also when the command runs in another folder. Nothing has to be remembered.
+- **A command reads what changed.** At the start of each command in the folder, `son` reads the node files that changed since it last looked (after a `git pull`, say). It says on stderr what it read: `son: read .son-data: 3 new, 1 changed`. The answer of the command on stdout stays as it is. When another session holds the database at that moment, a command that only reads does not wait: it answers from what is there, and the files are read by the next command.
+- **One file for each node.** Two people who each add a node never meet in git. Git reports a conflict only when both changed the same node.
+- **The later edit stays.** For a node that is here and in a file, the rules are those of `son import`: the content that was edited last stays, and the stale mark and the verification move as one unit. The times come from the clocks of the machines.
+- **Todo numbers.** Two people can each add todo `#31`. The todo that was made first keeps the number on every machine; the other gets the next free number, with its children, and `son` says so.
+- **A purge is passed on.** `son drop <id> --purge` removes the file and adds the id to `purged`. A teammate's `son` then erases the node and its history too. Git history still holds the old file: `son` cannot remove that. If the text was a secret, change the secret where it is used.
+- **Files are written by `son`.** A file deleted by hand comes back: only `son drop` removes a node. A hand edit comes in when the file is still a valid node and its `updated_at` is later than the stored one. A file that cannot be used (conflict marks after a merge, text that is not a node, text that looks like a secret) is skipped: `son` names it on stderr, the command still runs, and the file is left for you to repair. `son doctor` lists such files in the check `shared folder`.
+- **Branches.** There is one database for all branches and all clones of a repository on a machine. A node that was saved on one branch is written into the folder of the branch that is checked out next.
+- **Other people's text.** A shared folder lets another person put text in front of your agent. [Memory is reference, not instruction](../README.md#memory-is-reference-not-instruction) holds for it as for all recalled content.
+- **Versions.** A folder written in a later format than this `son` knows is left alone, with a message to install a newer `son`.
 
 ### Tags
 
@@ -74,7 +93,7 @@ The full detail of how `son` works. The [README](../README.md) has the short ver
 
 ### Health
 
-- **`son doctor` says what is wrong and how to put it right.** It checks the database file, its schema version, SQLite's integrity and reference checks, that the search index matches the nodes, that every stored node is of a form this `son` knows, and that the skill and instruction files are the ones this `son` writes. It also looks for stored text that looks like a secret, and for a database file that other users can read. Each check is `healthy`, `missing`, `stale`, `warning` or `problem`, with the command that fixes it (`son init`, `son reindex`, `son import <backup file> --replace`). Doctor only looks: it does not create or upgrade the database, and it repairs nothing. It exits with status 1 only when there is a `problem`.
+- **`son doctor` says what is wrong and how to put it right.** It checks the database file, its schema version, SQLite's integrity and reference checks, that the search index matches the nodes, that every stored node is of a form this `son` knows, and that the skill and instruction files are the ones this `son` writes. It also looks for stored text that looks like a secret, and for a database file that other users can read. In a project folder with a [shared folder](#shared-folder), it lists the files there that cannot be used. Each check is `healthy`, `missing`, `stale`, `warning` or `problem`, with the command that fixes it (`son init`, `son reindex`, `son import <backup file> --replace`). Doctor only looks: it does not create or upgrade the database, and it repairs nothing. It exits with status 1 only when there is a `problem`.
 - **Many sessions can use the database at the same time.** A session that finds it locked waits for up to 10 seconds, then fails with a message and changes nothing. Set `SON_BUSY_MS` to change that wait (in milliseconds).
 
 ## Commands
@@ -82,6 +101,7 @@ The full detail of how `son` works. The [README](../README.md) has the short ver
 ```
 son init [--agent a,b] [--scope global|project] [--yes]   create the database, set up agents
          [--todo-skill] [--todo-skill-name <name>] [--overwrite-todo-skill]
+         [--files]                                        with --scope project: turn the shared folder on
 son uninstall [--agent a,b] [--scope global|project] [--yes] [--dry-run]   remove what init wrote
 son remember <type> "<title>" [--body <text>|-] [--collection <name>] [--tag a,b] [--link <id>:<relation>]
                               [--evidence user-statement|observation|inference] [--ref <kind>:<value>]
@@ -116,6 +136,7 @@ son tags [--collection <name>]             the tags in use, with counts
 son seed [<folder>]                        list files you already wrote, to bring into son
 son completions <bash|zsh|fish|powershell> print a completion script for your shell
 son import <file|-> [--replace]            merge a JSON export, or restore a backup
+son files [on [<folder>] | off]            keep this project's collection as files, to share through git
 son backup <file|folder>                   write a full copy of the database
 son doctor                                 check the database and the agent setup
 son reindex

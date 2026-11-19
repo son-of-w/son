@@ -683,3 +683,39 @@ pub fn stats(stats: &Stats, database: &Path, installed: &[std::path::PathBuf], j
         }
     }
 }
+
+/// `son files`: whether the collection is kept as files here, and what
+/// the sync of `son files on` did.
+pub fn files(status: &crate::files::Status, synced: Option<&crate::files::Summary>, json: bool) {
+    if json {
+        crate::render::print_json(&serde_json::json!({ "files": status, "sync": synced }));
+        return;
+    }
+    if !status.on {
+        println!("files: off");
+        println!(
+            "Turn it on with `son files on`: the collection of this folder is then kept as \
+             files in it, to commit and share through git."
+        );
+        return;
+    }
+    println!(
+        "files: on for collection '{}'",
+        status.collection.as_deref().unwrap_or("?")
+    );
+    println!(
+        "folder: {} ({} node file(s))",
+        status.folder.as_deref().unwrap_or("?"),
+        status.nodes
+    );
+    for skipped in &status.skipped {
+        println!("skipped: nodes/{}: {}", skipped.file, skipped.reason);
+    }
+    if let Some(synced) = synced {
+        println!(
+            "wrote {} file(s), read {} new and {} changed node(s)",
+            synced.written, synced.added, synced.updated
+        );
+        println!("Commit the .son file and the folder to share them through git.");
+    }
+}

@@ -14,11 +14,12 @@
 //!
 //! `.son` is the one settings file for a folder: `key = value` lines, `#`
 //! starts a comment, and keys this version does not know are left alone, so
-//! later settings can go in the same file. `collection` is the only key
-//! now. The files of earlier versions, `.son-collection` and `.son-project`
+//! later settings can go in the same file. The keys are `collection` and
+//! `files` (the folder where the collection is kept as files, see
+//! `files.rs`). The files of earlier versions, `.son-collection` and `.son-project`
 //! (one line: the name), are still read.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const SETTINGS: &str = ".son";
@@ -35,6 +36,94 @@ pub fn setting(text: &str, key: &str) -> Option<String> {
 }
 pub const ENV: &str = "SON_COLLECTION";
 
+/// The key in `.son` that turns on the shared folder: its value is the
+/// folder, relative to the folder that holds `.son`.
+pub const FILES_KEY: &str = "files";
+
+/// The text of a `.son` file with `key` set to `value`, or taken out for
+/// `None`. Every other line stays as it is: comments, and keys that this
+/// version does not know.
+pub fn with_setting(text: &str, key: &str, value: Option<&str>) -> String {
+    let is_key = |line: &str| {
+        line.split('#')
+            .next()
+            .and_then(|part| part.split_once('='))
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut done = false;
+    for line in text.lines() {
+        if !is_key(line) {
+            lines.push(line.to_string());
+        } else if let (Some(value), false) = (value, done) {
+            lines.push(format!("{key} = {value}"));
+            done = true;
+        }
+    }
+    if let (Some(value), false) = (value, done) {
+        lines.push(format!("{key} = {value}"));
+    }
+    let mut out = lines.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// What a `.son` file says about a shared folder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shared {
+    /// The folder that holds the `.son` file.
+    pub root: PathBuf,
+    /// The value of the `files` key.
+    pub folder: String,
+    /// The collection that the same file names, when it names one.
+    pub collection: Option<String>,
+}
+
+impl Shared {
+    /// The folder with the files. An error when the value of the key
+    /// leaves the folder of `.son`: an absolute path, or one with `..`.
+    pub fn dir(&self) -> Result<PathBuf, String> {
+        use std::path::Component;
+        let folder = Path::new(&self.folder);
+        let inside = folder
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir));
+        if !inside || folder.components().all(|part| part == Component::CurDir) {
+            return Err(format!(
+                "`{FILES_KEY} = {}` in {} must name a folder inside that folder",
+                self.folder,
+                self.root.join(SETTINGS).display()
+            ));
+        }
+        Ok(self.root.join(folder))
+    }
+}
+
+/// The shared folder that the `.son` file in `root` turns on, if it does.
+pub fn shared_in(root: &Path) -> Option<Shared> {
+    let text = std::fs::read_to_string(root.join(SETTINGS)).ok()?;
+    Some(Shared {
+        root: root.to_path_buf(),
+        folder: setting(&text, FILES_KEY)?,
+        collection: setting(&text, "collection"),
+    })
+}
+
+/// The shared folder for work in `cwd`: from the nearest `.son`, in the
+/// directory or a parent, that has the `files` key.
+pub fn shared(cwd: &Path) -> Option<Shared> {
+    cwd.ancestors().find_map(shared_in)
+}
+
+/// The folder of the nearest `.son` file, in the directory or a parent.
+pub fn settings_root(cwd: &Path) -> Option<PathBuf> {
+    cwd.ancestors()
+        .find(|dir| dir.join(SETTINGS).is_file())
+        .map(Path::to_path_buf)
+}
+
 pub fn detect(cwd: &Path) -> String {
     std::env::var(ENV)
         .ok()
@@ -50,9 +139,9 @@ pub fn detect(cwd: &Path) -> String {
 }
 
 /// The folder that holds the project: the git root, else `cwd` itself.
-pub fn root(cwd: &Path) -> std::path::PathBuf {
+pub fn root(cwd: &Path) -> PathBuf {
     git(cwd, &["rev-parse", "--show-toplevel"])
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .unwrap_or_else(|| cwd.to_path_buf())
 }
 
@@ -126,6 +215,42 @@ mod tests {
             Some("infra")
         );
         assert_eq!(repo_name("").as_deref(), None);
+    }
+
+    #[test]
+    fn a_setting_is_written_and_the_other_lines_stay() {
+        let text = "# settings\nfuture_key = 1\ncollection = alpha  # the name\n";
+        let on = with_setting(text, FILES_KEY, Some(".son-data"));
+        assert_eq!(
+            on,
+            "# settings\nfuture_key = 1\ncollection = alpha  # the name\nfiles = .son-data\n"
+        );
+        assert_eq!(setting(&on, FILES_KEY).as_deref(), Some(".son-data"));
+        let moved = with_setting(&on, FILES_KEY, Some("docs/memory"));
+        assert_eq!(setting(&moved, FILES_KEY).as_deref(), Some("docs/memory"));
+        assert_eq!(moved.matches("files =").count(), 1);
+        assert_eq!(with_setting(&moved, FILES_KEY, None), text);
+        assert_eq!(
+            with_setting("", "collection", Some("a")),
+            "collection = a\n"
+        );
+    }
+
+    #[test]
+    fn a_shared_folder_must_stay_inside() {
+        let shared = |folder: &str| Shared {
+            root: PathBuf::from("root"),
+            folder: folder.to_string(),
+            collection: None,
+        };
+        assert_eq!(
+            shared(".son-data").dir().unwrap(),
+            Path::new("root").join(".son-data")
+        );
+        assert!(shared("docs/memory").dir().is_ok());
+        assert!(shared("../other").dir().is_err());
+        assert!(shared("/tmp/x").dir().is_err());
+        assert!(shared(".").dir().is_err());
     }
 
     #[test]

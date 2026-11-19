@@ -527,19 +527,51 @@ pub fn import(
     dump: &Dump,
     allow_secret: bool,
 ) -> Result<ImportStats> {
+    store::write(conn, || {
+        // The whole import is one operation in the history.
+        let mut rec = Recorder::new(conn, "import");
+        let rules = Rules {
+            allow_secret,
+            older_keeps_number: false,
+        };
+        let stats = import_into(conn, an, dump, &rules, &mut rec)?;
+        rec.finish(meta)?;
+        Ok(stats)
+    })
+}
+
+/// How [`import_into`] treats what arrives.
+pub struct Rules {
+    /// Take text that looks like it holds a secret.
+    pub allow_secret: bool,
+    /// When an arriving todo has the number of a stored todo: the todo that
+    /// was made first (the lower id) keeps the number, and the other gets
+    /// the next free one. Without this the stored todo always keeps it.
+    /// The sync of a shared folder uses it, so that every machine gives
+    /// the same todo the number.
+    pub older_keeps_number: bool,
+}
+
+/// The work of [`import`], inside a write transaction and an operation
+/// that the caller holds.
+pub fn import_into(
+    conn: &Connection,
+    an: &Analyzer,
+    dump: &Dump,
+    rules: &Rules,
+    rec: &mut Recorder,
+) -> Result<ImportStats> {
     if dump.version != DUMP_VERSION {
         bail!("upgrade the export before importing it");
     }
-    store::write(conn, || {
+    {
         refuse_faults(conn, dump)?;
-        if !allow_secret {
+        if !rules.allow_secret {
             refuse_secrets(dump)?;
         }
         // Rows may arrive before the rows they point at.
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut stats = ImportStats::default();
-        // The whole import is one operation in the history.
-        let mut rec = Recorder::new(conn, "import");
 
         // Todos that are written by this import and have a number: it is
         // set after all rows are in, parents first (see below).
@@ -687,6 +719,33 @@ pub fn import(
                 node.number.clone()?,
             ))
         };
+        if rules.older_keeps_number {
+            // A stored todo that was made after the arriving one gives up
+            // the number, with its children.
+            for node in &numbered {
+                let Some((collection, number)) = place(node) else {
+                    continue;
+                };
+                let Some(holder) = store::find_by_number(conn, &collection, &number)? else {
+                    continue;
+                };
+                if holder.as_str() <= node.id.as_str() {
+                    continue;
+                }
+                let to = store::next_number(conn, &collection, store::parent_number(&number))?;
+                for id in store::under_number(conn, &collection, &number)? {
+                    rec.touch(&id)?;
+                }
+                for (id, title, from, to) in store::renumber(conn, &collection, &number, &to)? {
+                    stats.renumbered.push(Renumbered {
+                        id,
+                        title,
+                        from,
+                        to,
+                    });
+                }
+            }
+        }
         let mut taken: HashSet<(String, String)> = HashSet::new();
         for node in &numbered {
             if let Some((collection, number)) = place(node) {
@@ -784,9 +843,8 @@ pub fn import(
                 params![synonym.term, synonym.canonical],
             )?;
         }
-        rec.finish(meta)?;
         Ok(stats)
-    })
+    }
 }
 
 /// True when two copies of a node have the same stale mark and the same

@@ -6,9 +6,12 @@ son doctor:
 son drop: --purge <id>
 son edit: --body --collection --evidence --priority --ref --status --tag --title --type --unref <id>
 son export: --collection --tag
+son files off: 
+son files on: <folder>
+son files: 
 son history: --limit --op --page <id>
 son import: --replace <file>
-son init: --agent|-a --db-only --global|-g --list-agents --overwrite-todo-skill --print-block --print-skill --scope --skill-only --todo-skill --todo-skill-name --yes|-y
+son init: --agent|-a --db-only --files --global|-g --list-agents --overwrite-todo-skill --print-block --print-skill --scope --skill-only --todo-skill --todo-skill-name --yes|-y
 son link: <from> <relation> <to>
 son list: --collection --dropped --limit --page --tag --type
 son log: --collection --command --errors --limit --page

@@ -553,11 +553,63 @@ fn file_checks(checks: &mut Vec<Check>) {
     }
 }
 
+/// The shared folder of the current project folder, when `.son` turns
+/// one on (see `files.rs`). No check when it does not.
+fn shared_check(checks: &mut Vec<Check>) {
+    let Some(shared) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::project::shared(&cwd))
+    else {
+        return;
+    };
+    let name = "shared folder";
+    checks.push(match crate::files::inspect(&shared) {
+        Err(err) => check(
+            name,
+            Status::Warning,
+            format!("the folder is not read or written: {err:#}"),
+            None,
+        ),
+        Ok(found) if found.skipped.is_empty() => check(
+            name,
+            Status::Healthy,
+            format!(
+                "{} holds {} node file(s) of collection '{}'",
+                found.folder.display(),
+                found.nodes,
+                shared.collection.as_deref().unwrap_or("?")
+            ),
+            None,
+        ),
+        Ok(found) => {
+            let lines: Vec<String> = found
+                .skipped
+                .iter()
+                .map(|skipped| format!("nodes/{}: {}", skipped.file, skipped.reason))
+                .collect();
+            check(
+                name,
+                Status::Warning,
+                format!(
+                    "{} file(s) in {} cannot be used and are skipped: {}",
+                    lines.len(),
+                    found.folder.display(),
+                    lines.join("; ")
+                ),
+                Some(
+                    "repair each file, or delete it: son writes a deleted file again from the database",
+                ),
+            )
+        }
+    });
+}
+
 /// Look at everything. Reads only.
 pub fn run(database: &Path) -> Report {
     let mut checks = Vec::new();
     database_checks(database, &mut checks);
     file_checks(&mut checks);
+    shared_check(&mut checks);
     Report {
         status: checks
             .iter()

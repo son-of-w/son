@@ -2125,11 +2125,12 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
         found.sort();
         found
     };
-    // Bring a database back to schema 8: take away what schemas 9 to 12 added.
+    // Bring a database back to schema 8: take away what schemas 9 to 13 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "DROP INDEX nodes_number; DROP TABLE todo_numbers; ALTER TABLE nodes DROP COLUMN number; \
+            "DROP TABLE shared_folders; DROP TABLE shared_files; DROP TABLE shared_purged; \
+             DROP INDEX nodes_number; DROP TABLE todo_numbers; ALTER TABLE nodes DROP COLUMN number; \
              ALTER TABLE nodes DROP COLUMN freshness_at; ALTER TABLE nodes DROP COLUMN priority; ALTER TABLE nodes DROP COLUMN stale_at; \
              ALTER TABLE nodes DROP COLUMN stale_note; PRAGMA user_version = 8;",
         )
@@ -2138,7 +2139,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
 
     // A new database: created, and no copy.
     let first = sb.ok("alpha", &["init", "--db-only"]).stdout;
-    assert!(first.contains("database: created (schema 12)"), "{first}");
+    assert!(first.contains("database: created (schema 13)"), "{first}");
     let again = sb.ok("alpha", &["--json", "init", "--db-only"]).json();
     assert_eq!(again["database_state"]["state"], "current");
     assert!(copies().is_empty());
@@ -2153,7 +2154,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let state = &report["database_state"];
     assert_eq!(state["state"], "upgraded");
     assert_eq!(state["from"], 8);
-    assert_eq!(state["schema"], 12);
+    assert_eq!(state["schema"], 13);
     let found = copies();
     assert_eq!(found.len(), 1);
     assert_eq!(state["copy"], found[0].display().to_string());
@@ -2168,7 +2169,7 @@ fn a_schema_upgrade_copies_the_old_database_first_and_init_reports_it() {
     let out = sb.ok("alpha", &["--json", "list"]);
     assert!(
         out.stderr
-            .contains("son: database: upgraded from schema 8 to 12"),
+            .contains("son: database: upgraded from schema 8 to 13"),
         "{}",
         out.stderr
     );
@@ -5039,12 +5040,12 @@ fn doctor_reports_and_changes_nothing() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 8);
-    raw().execute_batch("PRAGMA user_version = 12").unwrap();
+    raw().execute_batch("PRAGMA user_version = 13").unwrap();
     raw().execute_batch("PRAGMA user_version = 999").unwrap();
     let (ok, report) = status(&sb);
     assert!(!ok);
     assert_eq!(of(&report, "schema"), "problem");
-    raw().execute_batch("PRAGMA user_version = 12").unwrap();
+    raw().execute_batch("PRAGMA user_version = 13").unwrap();
 
     // A row that points at nothing.
     raw()

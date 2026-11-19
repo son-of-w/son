@@ -281,6 +281,7 @@ Do not store secrets. The database is plain text: anyone who can read the file c
 - **Todos.** A todo has a status, a number you can say (`#4`), an optional priority (`p0` to `p4`), and can have children (`#4.1`).
 - **Evidence.** A node can say where it came from and when someone last checked it. `son review` lists the nodes that are old, marked stale, or possible duplicates. It never deletes anything.
 - **Undo.** Nothing is lost by default. `son drop` is a soft delete, every change is kept in the history, and `son undo` reverses a change. Only `son drop --purge` erases.
+- **Sharing through git.** `son files on` keeps a collection as files in its project folder, one small JSON file for each node. Commit the folder, and a teammate who pulls gets the memory. `son` keeps the files and the database in step by itself.
 - **Backup.** `son backup` writes a full copy of the database. `son export --json` writes a file you can merge into another database with `son import`.
 - **Health.** `son doctor` checks the database and the agent setup, and names the command that fixes each problem.
 
@@ -306,6 +307,7 @@ son history <id>                   list the changes to a node
 son undo <id>                      reverse the newest change
 son drop <id>                      remove a node (son restore brings it back)
 
+son files on                       keep this project's memory as files, to share through git
 son backup <file>                  write a full copy of the database
 son export                         write your nodes as markdown or JSON
 son import <file>                  merge an export, or restore a backup

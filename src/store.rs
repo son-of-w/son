@@ -151,6 +151,59 @@ pub fn set_number(conn: &Connection, id: &str, number: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// The ids of the todo with the number `number` and of every todo under it.
+pub fn under_number(conn: &Connection, project_id: &str, number: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT id, number FROM nodes WHERE project_id = ?1 AND number IS NOT NULL")?
+        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let under = format!("{number}.");
+    Ok(rows
+        .into_iter()
+        .filter(|(_, n)| n == number || n.starts_with(&under))
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// Move the todo with the number `from`, and every todo under it, to the
+/// number `to`: `4` and `4.1` become `31` and `31.1`. Gives back each todo
+/// that moved: its id, title, old number and new number.
+pub fn renumber(
+    conn: &Connection,
+    project_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<(String, String, String, String)>> {
+    let rows: Vec<(String, String, String)> = conn
+        .prepare(
+            "SELECT id, title, number FROM nodes WHERE project_id = ?1 AND number IS NOT NULL",
+        )?
+        .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let under = format!("{from}.");
+    let mut moved = Vec::new();
+    for (id, title, number) in rows {
+        let new = if number == from {
+            to.to_string()
+        } else if let Some(rest) = number.strip_prefix(&under) {
+            format!("{to}.{rest}")
+        } else {
+            continue;
+        };
+        moved.push((id, title, number, new));
+    }
+    // Parents first, and out of the way first: the unique index must
+    // never see two todos with one number.
+    for (id, ..) in &moved {
+        set_number(conn, id, None)?;
+    }
+    for (id, _, _, new) in &moved {
+        note_number(conn, project_id, new)?;
+        set_number(conn, id, Some(new))?;
+    }
+    Ok(moved)
+}
+
 /// The open todos that are children of the todo `id`, at any depth: by
 /// number (`4.1`, `4.1.2` under `4`) and by a `belongs_to` link.
 pub fn open_children(conn: &Connection, node: &Node) -> Result<Vec<Node>> {
